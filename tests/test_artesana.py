@@ -1,0 +1,214 @@
+import os
+import re
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import costeo  # noqa: E402
+from app import crear_app  # noqa: E402
+from utils import parse_num  # noqa: E402
+
+
+# ------------------------------------------------------------ cálculo puro
+
+def datos_ejemplo():
+    ing = {
+        1: dict(nombre="Leche entera", presentacion_cantidad=1, presentacion_unidad="l", precio=8000),
+        2: dict(nombre="Azúcar", presentacion_cantidad=1, presentacion_unidad="kg", precio=7000),
+        3: dict(nombre="Bicarbonato", presentacion_cantidad=100, presentacion_unidad="g", precio=3000),
+        4: dict(nombre="Vainilla", presentacion_cantidad=100, presentacion_unidad="ml", precio=10000),
+        5: dict(nombre="Maicena", presentacion_cantidad=1, presentacion_unidad="kg", precio=14000),
+        6: dict(nombre="Harina", presentacion_cantidad=1, presentacion_unidad="kg", precio=6000),
+        7: dict(nombre="Manteca", presentacion_cantidad=200, presentacion_unidad="g", precio=10000),
+        8: dict(nombre="Huevo", presentacion_cantidad=30, presentacion_unidad="u", precio=30000),
+        9: dict(nombre="Polvo", presentacion_cantidad=100, presentacion_unidad="g", precio=4000),
+        10: dict(nombre="Coco", presentacion_cantidad=100, presentacion_unidad="g", precio=6000),
+        11: dict(nombre="Bolsita", presentacion_cantidad=100, presentacion_unidad="u", precio=50000),
+    }
+    rec = {
+        1: dict(nombre="DDL", tipo="subreceta", rinde=1000, unidad_rinde="g", multiplicador=0, precio_venta_real=None),
+        2: dict(nombre="Alfajores", tipo="venta", rinde=30, unidad_rinde="u", multiplicador=3, precio_venta_real=None),
+    }
+    lineas = [(1, 1, 2000), (1, 2, 600), (1, 3, 2), (1, 4, 5),
+              (2, 5, 300), (2, 6, 200), (2, 7, 200), (2, 2, 150), (2, 8, 3), (2, 9, 10), (2, 4, 5),
+              (2, 10, 50), (2, 11, 30)]
+    items = [dict(id=n, receta_id=r, ingrediente_id=i, subreceta_id=None, cantidad=c)
+             for n, (r, i, c) in enumerate(lineas, 1)]
+    items.append(dict(id=99, receta_id=2, ingrediente_id=None, subreceta_id=1, cantidad=600))
+    return ing, rec, items
+
+
+def test_mismos_numeros_que_la_planilla():
+    ing, rec, items = datos_ejemplo()
+    r = costeo.calcular(ing, rec, items, redondeo=100)["recetas"]
+    assert r[1]["costo_tanda"] == pytest.approx(20760)
+    assert r[1]["costo_unitario"] == pytest.approx(20.76)
+    assert r[2]["costo_tanda"] == pytest.approx(50806)
+    assert r[2]["costo_unitario"] == pytest.approx(1693.5333, rel=1e-6)
+    assert r[2]["precio_venta"] == 5100
+    assert r[2]["ganancia"] == pytest.approx(5100 - 1693.5333, rel=1e-6)
+    assert r[2]["alertas"] == []
+
+
+def test_precio_real_y_alertas():
+    ing, rec, items = datos_ejemplo()
+    rec[2]["precio_venta_real"] = 1000
+    r = costeo.calcular(ing, rec, items)["recetas"][2]
+    assert r["precio_venta"] == 1000
+    assert "El precio de venta real es menor que el costo" in r["alertas"]
+
+
+def test_redondeo_sin_escalon_de_mas():
+    assert costeo.redondear_arriba(5100.0000000001, 100) == 5100
+    assert costeo.redondear_arriba(5080.6, 100) == 5100
+    assert costeo.redondear_arriba(5080.6, 500) == 5500
+
+
+def test_ciclos():
+    items = [dict(receta_id=1, subreceta_id=2), dict(receta_id=2, subreceta_id=3)]
+    assert costeo.crearia_ciclo(3, 1, items)
+    assert costeo.crearia_ciclo(1, 1, items)
+    assert not costeo.crearia_ciclo(1, 3, items)
+
+
+def test_numeros_paraguayos():
+    assert parse_num("1.500") == 1500
+    assert parse_num("10.000 Gs") == 10000
+    assert parse_num("2,4") == 2.4
+    assert parse_num("1.234,5") == 1234.5
+    assert parse_num("0.5") == 0.5
+    with pytest.raises(ValueError):
+        parse_num("abc")
+
+
+# ------------------------------------------------------------ app web
+
+@pytest.fixture
+def cliente(tmp_path):
+    app = crear_app({"DATABASE_URL": f"sqlite:///{tmp_path / 'test.db'}",
+                     "APP_PASSWORD": "clave123", "TESTING": True})
+    c = app.test_client()
+    with c.session_transaction() as s:
+        s["csrf"] = "tok"
+    return c
+
+
+def post(c, url, **datos):
+    datos["csrf"] = "tok"
+    return c.post(url, data=datos, follow_redirects=True)
+
+
+def entrar(c):
+    r = post(c, "/login", password="clave123")
+    assert r.status_code == 200
+    with c.session_transaction() as s:
+        s["csrf"] = "tok"
+
+
+def test_login_obligatorio(cliente):
+    r = cliente.get("/")
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+    assert cliente.get("/salud").data == b"ok"
+    r = post(cliente, "/login", password="mal")
+    assert "Contraseña incorrecta" in r.get_data(as_text=True)
+
+
+def test_csrf(cliente):
+    entrar(cliente)
+    r = cliente.post("/ejemplo", data={"csrf": "otro"})
+    assert r.status_code == 400
+
+
+def test_flujo_completo(cliente):
+    entrar(cliente)
+    html = cliente.get("/").get_data(as_text=True)
+    assert "Cargar un ejemplo" in html
+
+    html = post(cliente, "/ejemplo").get_data(as_text=True)
+    assert "Alfajores de maicena" in html
+    assert "5.100" in html and "50.806" in html and "1.694" in html
+
+    # detalle de las dos recetas
+    for rid in (1, 2):
+        assert cliente.get(f"/recetas/{rid}").status_code == 200
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert "Dulce de leche casero" in det and "12.456" in det
+
+    # páginas de ingredientes y configuración
+    assert "20,76" not in cliente.get("/ingredientes").get_data(as_text=True)  # subreceta no es ingrediente
+    assert cliente.get("/ingredientes/1").status_code == 200
+    assert cliente.get("/configuracion").status_code == 200
+    assert cliente.get("/recetas/nueva").status_code == 200
+    assert cliente.get("/recetas/2/editar").status_code == 200
+    assert cliente.get("/ingredientes/nuevo").status_code == 200
+
+    # nuevo ingrediente con formato paraguayo
+    html = post(cliente, "/ingredientes/nuevo", nombre="Chocolate cobertura", presentacion_cantidad="1",
+                presentacion_unidad="kg", precio="85.000").get_data(as_text=True)
+    assert "Chocolate cobertura" in html and "85" in html
+
+    # nuevo producto vendido por kg
+    html = post(cliente, "/recetas/nueva", nombre="Pan dulce", tipo="venta", rinde="2,4",
+                unidad_rinde="kg", multiplicador="3", notas="").get_data(as_text=True)
+    assert "Pan dulce" in html
+    rid = int(re.search(r'/recetas/(\d+)/lineas"', html).group(1))
+    ing_choco = 12
+    html = post(cliente, f"/recetas/{rid}/lineas", componente=f"i:{ing_choco}", cantidad="300").get_data(as_text=True)
+    assert "25.500" in html  # 300 g x 85 Gs/g
+    # 25.500 / 2,4 kg = 10.625 por kg -> x3 = 31.875 -> 31.900
+    assert "31.900" in html
+
+    # editar cantidad de la línea
+    lid = int(re.search(rf'/recetas/{rid}/lineas/(\d+)"', html).group(1))
+    html = post(cliente, f"/recetas/{rid}/lineas/{lid}", cantidad="600").get_data(as_text=True)
+    assert "51.000" in html
+
+    # subreceta: no puede contenerse a sí misma
+    html = post(cliente, "/recetas/1/lineas", componente="r:1", cantidad="10").get_data(as_text=True)
+    assert "ya contiene a esta receta" in html
+
+    # no se borra lo que está en uso
+    html = post(cliente, "/ingredientes/1/borrar").get_data(as_text=True)
+    assert "No se puede borrar" in html
+    html = post(cliente, "/recetas/1/borrar").get_data(as_text=True)
+    assert "No se puede borrar" in html
+
+    # cambio de precio -> historial y recálculo
+    html = post(cliente, "/ingredientes/11", nombre="Bolsita para alfajor", presentacion_cantidad="100",
+                presentacion_unidad="u", precio="60.000", notas="").get_data(as_text=True)
+    hist = cliente.get("/ingredientes/11").get_data(as_text=True)
+    assert "60.000" in hist and "50.000" in hist
+    # 50.806 + 3.000 = 53.806 / 30 = 1.793,5 x3 = 5.380,6 -> 5.400
+    assert "5.400" in cliente.get("/").get_data(as_text=True)
+
+    # redondeo configurable
+    post(cliente, "/configuracion", redondeo="500")
+    assert "5.500" in cliente.get("/").get_data(as_text=True)
+
+    # precio real
+    html = post(cliente, "/recetas/2/editar", nombre="Alfajores de maicena", tipo="venta", rinde="30",
+                unidad_rinde="u", multiplicador="3", precio_venta_real="6.000", notas="").get_data(as_text=True)
+    assert "6.000" in html and "Precio real cargado" in html
+
+    # duplicar y borrar
+    html = post(cliente, "/recetas/2/duplicar").get_data(as_text=True)
+    assert "(copia)" in html
+    html = post(cliente, "/recetas/4/borrar").get_data(as_text=True)
+    assert "borrada" in html
+
+    # validaciones
+    html = post(cliente, "/recetas/nueva", nombre="Mal", tipo="subreceta", rinde="1",
+                unidad_rinde="kg").get_data(as_text=True)
+    assert "g, ml o u" in html
+    html = post(cliente, "/ingredientes/nuevo", nombre="X", presentacion_cantidad="0",
+                presentacion_unidad="g", precio="1").get_data(as_text=True)
+    assert "mayor a 0" in html
+    html = post(cliente, "/ingredientes/nuevo", nombre="Maicena", presentacion_cantidad="1",
+                presentacion_unidad="kg", precio="1").get_data(as_text=True)
+    assert "Ya existe" in html
+
+    # salir
+    post(cliente, "/logout")
+    assert cliente.get("/").status_code == 302

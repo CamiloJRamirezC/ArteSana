@@ -1,0 +1,476 @@
+"""ArteSana - lista de materiales y costeo (app web Flask).
+
+Ejecutar en tu computadora:   flask --app app run --debug
+En internet (Render):         gunicorn app:app
+"""
+import hmac
+import os
+import secrets
+from datetime import date
+from functools import wraps
+
+from flask import (Flask, abort, flash, redirect, render_template, request,
+                   session, url_for)
+
+import costeo
+import db
+from utils import cant, gs, gs_unit, parse_num, pct
+
+
+def crear_app(config=None):
+    app = Flask(__name__, instance_relative_config=True)
+    app.config.update(
+        SECRET_KEY=os.environ.get("SECRET_KEY") or "solo-para-desarrollo-local",
+        DATABASE_URL=os.environ.get("DATABASE_URL", ""),
+        APP_PASSWORD=os.environ.get("APP_PASSWORD", ""),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,
+    )
+    if os.environ.get("RENDER") or os.environ.get("SESSION_COOKIE_SECURE") == "1":
+        app.config["SESSION_COOKIE_SECURE"] = True
+    if config:
+        app.config.update(config)
+
+    app.teardown_appcontext(db.cerrar)
+    app.jinja_env.filters.update(gs=gs, gs_unit=gs_unit, cant=cant, pct=pct)
+
+    with app.app_context():
+        db.crear_tablas()
+
+    registrar_rutas(app)
+    return app
+
+
+# ---------------------------------------------------------------- helpers
+
+def _token_csrf():
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_hex(16)
+    return session["csrf"]
+
+
+def _datos():
+    """Carga todo y calcula. El volumen de un emprendimiento es chico, así que
+    recalcular en cada pantalla es simple y siempre está al día."""
+    ingredientes = {i["id"]: i for i in db.consultar("SELECT * FROM ingredientes ORDER BY nombre")}
+    recetas = {r["id"]: r for r in db.consultar("SELECT * FROM recetas ORDER BY nombre")}
+    items = db.consultar("SELECT * FROM receta_items ORDER BY receta_id, orden, id")
+    redondeo = parse_num(db.obtener_config("redondeo", "100"), 100)
+    calculo = costeo.calcular(ingredientes, recetas, items, redondeo)
+    return ingredientes, recetas, items, calculo, redondeo
+
+
+def _num(campo, obligatorio=True, minimo=None):
+    valor = parse_num(request.form.get(campo))
+    if valor is None and obligatorio:
+        raise ValueError(f"Falta completar «{campo.replace('_', ' ')}»")
+    if valor is not None and minimo is not None and valor < minimo:
+        raise ValueError(f"«{campo.replace('_', ' ')}» no puede ser menor a {minimo}")
+    return valor
+
+
+def _texto(campo, obligatorio=True):
+    valor = (request.form.get(campo) or "").strip()
+    if obligatorio and not valor:
+        raise ValueError(f"Falta completar «{campo}»")
+    return valor
+
+
+def _usos_ingrediente(iid, recetas, items):
+    return sorted({recetas[it["receta_id"]]["nombre"] for it in items if it["ingrediente_id"] == iid})
+
+
+def _usos_receta(rid, recetas, items):
+    return sorted({recetas[it["receta_id"]]["nombre"] for it in items if it["subreceta_id"] == rid})
+
+
+def _registrar_precio(iid, cantidad, unidad, precio, origen="manual"):
+    db.ejecutar(
+        "INSERT INTO precios_historial (ingrediente_id, fecha, presentacion_cantidad, "
+        "presentacion_unidad, precio, origen) VALUES (?, ?, ?, ?, ?, ?)",
+        (iid, date.today().isoformat(), cantidad, unidad, precio, origen),
+    )
+
+
+# ---------------------------------------------------------------- rutas
+
+def registrar_rutas(app):
+
+    @app.context_processor
+    def globales():
+        return {"csrf_token": _token_csrf, "con_login": bool(app.config["APP_PASSWORD"]),
+                "UNIDADES_PRESENTACION": list(costeo.UNIDADES_PRESENTACION),
+                "UNIDADES_RINDE_VENTA": costeo.UNIDADES_RINDE_VENTA,
+                "UNIDADES_RINDE_SUBRECETA": costeo.UNIDADES_RINDE_SUBRECETA}
+
+    @app.before_request
+    def proteger():
+        if request.endpoint in ("login", "static", "salud"):
+            return None
+        if app.config["APP_PASSWORD"] and not session.get("ok"):
+            return redirect(url_for("login", siguiente=request.path))
+        if request.method == "POST":
+            enviado = request.form.get("csrf", "")
+            if not hmac.compare_digest(enviado, session.get("csrf", "")):
+                abort(400, "El formulario venció. Volvé atrás y recargá la página.")
+        return None
+
+    @app.get("/salud")
+    def salud():
+        # Toca la base para que Supabase no la pause por inactividad
+        db.consultar("SELECT 1 AS ok")
+        return "ok"
+
+    # ---------- login
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if not app.config["APP_PASSWORD"]:
+            return redirect(url_for("productos"))
+        if request.method == "POST":
+            if hmac.compare_digest(request.form.get("password", ""), app.config["APP_PASSWORD"]):
+                session.clear()
+                session.permanent = True
+                session["ok"] = True
+                destino = request.args.get("siguiente") or ""
+                return redirect(destino if destino.startswith("/") and not destino.startswith("//")
+                                else url_for("productos"))
+            flash("Contraseña incorrecta", "error")
+        return render_template("login.html")
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    # ---------- productos / recetas
+    @app.get("/")
+    def productos():
+        ingredientes, recetas, items, calculo, redondeo = _datos()
+        filas = [{**r, **calculo["recetas"][rid]} for rid, r in recetas.items()]
+        return render_template(
+            "productos.html",
+            venta=[f for f in filas if f["tipo"] == "venta"],
+            subrecetas=[f for f in filas if f["tipo"] == "subreceta"],
+            vacio=not ingredientes and not recetas,
+            redondeo=redondeo,
+        )
+
+    @app.route("/recetas/nueva", methods=["GET", "POST"])
+    def receta_nueva():
+        if request.method == "POST":
+            try:
+                datos = _form_receta()
+                rid = db.ejecutar(
+                    "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, "
+                    "precio_venta_real, notas) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    datos, devolver_id=True)
+                flash("Receta creada. Ahora cargá sus ingredientes.", "ok")
+                return redirect(url_for("receta", rid=rid))
+            except ValueError as e:
+                flash(str(e), "error")
+            except db.ErrorDeIntegridad:
+                flash("Ya existe una receta con ese nombre", "error")
+        tipo = request.args.get("tipo", "venta")
+        return render_template("receta_form.html", receta=None, tipo=tipo, form=request.form)
+
+    def _form_receta():
+        tipo = request.form.get("tipo", "venta")
+        if tipo not in costeo.TIPOS_RECETA:
+            raise ValueError("Tipo de receta inválido")
+        unidad = request.form.get("unidad_rinde", "u")
+        validas = costeo.UNIDADES_RINDE_VENTA if tipo == "venta" else costeo.UNIDADES_RINDE_SUBRECETA
+        if unidad not in validas:
+            raise ValueError("Una subreceta tiene que rendir en g, ml o u para poder usarla en otras recetas")
+        rinde = _num("rinde", minimo=0)
+        if rinde <= 0:
+            raise ValueError("El rinde tiene que ser mayor a 0")
+        mult = _num("multiplicador", obligatorio=(tipo == "venta"), minimo=0) or 0
+        real = _num("precio_venta_real", obligatorio=False, minimo=0) if tipo == "venta" else None
+        return (_texto("nombre"), tipo, rinde, unidad, mult, real or None, _texto("notas", False))
+
+    @app.get("/recetas/<int:rid>")
+    def receta(rid):
+        ingredientes, recetas, items, calculo, redondeo = _datos()
+        if rid not in recetas:
+            abort(404)
+        subrecetas_posibles = [r for r in recetas.values() if r["tipo"] == "subreceta"
+                               and not costeo.crearia_ciclo(rid, r["id"], items)]
+        return render_template(
+            "receta.html",
+            receta=recetas[rid],
+            res=calculo["recetas"][rid],
+            ingredientes=list(ingredientes.values()),
+            precios=calculo["ingredientes"],
+            subrecetas_posibles=subrecetas_posibles,
+            costos_recetas=calculo["recetas"],
+            usado_en=_usos_receta(rid, recetas, items),
+            unidad_base=costeo.unidad_base,
+            redondeo=redondeo,
+        )
+
+    @app.route("/recetas/<int:rid>/editar", methods=["GET", "POST"])
+    def receta_editar(rid):
+        r = db.consultar_uno("SELECT * FROM recetas WHERE id = ?", (rid,))
+        if not r:
+            abort(404)
+        if request.method == "POST":
+            try:
+                datos = _form_receta()
+                if datos[1] == "venta" and r["tipo"] == "subreceta":
+                    _, recetas, items, _, _ = _datos()
+                    usos = _usos_receta(rid, recetas, items)
+                    if usos:
+                        raise ValueError("No se puede pasar a Venta: se usa como subreceta en " + ", ".join(usos))
+                db.ejecutar(
+                    "UPDATE recetas SET nombre=?, tipo=?, rinde=?, unidad_rinde=?, multiplicador=?, "
+                    "precio_venta_real=?, notas=? WHERE id=?", datos + (rid,))
+                flash("Receta guardada", "ok")
+                return redirect(url_for("receta", rid=rid))
+            except ValueError as e:
+                flash(str(e), "error")
+            except db.ErrorDeIntegridad:
+                flash("Ya existe una receta con ese nombre", "error")
+        return render_template("receta_form.html", receta=r, tipo=r["tipo"],
+                               form=request.form if request.method == "POST" else None)
+
+    @app.post("/recetas/<int:rid>/borrar")
+    def receta_borrar(rid):
+        _, recetas, items, _, _ = _datos()
+        if rid not in recetas:
+            abort(404)
+        usos = _usos_receta(rid, recetas, items)
+        if usos:
+            flash("No se puede borrar: se usa en " + ", ".join(usos), "error")
+            return redirect(url_for("receta", rid=rid))
+        db.ejecutar("DELETE FROM receta_items WHERE receta_id = ?", (rid,))
+        db.ejecutar("DELETE FROM recetas WHERE id = ?", (rid,))
+        flash(f"Receta «{recetas[rid]['nombre']}» borrada", "ok")
+        return redirect(url_for("productos"))
+
+    @app.post("/recetas/<int:rid>/duplicar")
+    def receta_duplicar(rid):
+        r = db.consultar_uno("SELECT * FROM recetas WHERE id = ?", (rid,))
+        if not r:
+            abort(404)
+        nombre, n = f"{r['nombre']} (copia)", 2
+        while db.consultar_uno("SELECT id FROM recetas WHERE nombre = ?", (nombre,)):
+            nombre, n = f"{r['nombre']} (copia {n})", n + 1
+        nuevo = db.ejecutar(
+            "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, precio_venta_real, notas) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (nombre, r["tipo"], r["rinde"], r["unidad_rinde"], r["multiplicador"],
+             r["precio_venta_real"], r["notas"]), devolver_id=True)
+        for it in db.consultar("SELECT * FROM receta_items WHERE receta_id = ? ORDER BY orden, id", (rid,)):
+            db.ejecutar(
+                "INSERT INTO receta_items (receta_id, ingrediente_id, subreceta_id, cantidad, orden) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (nuevo, it["ingrediente_id"], it["subreceta_id"], it["cantidad"], it["orden"]))
+        flash("Receta duplicada. Cambiale el nombre y ajustá lo que haga falta.", "ok")
+        return redirect(url_for("receta_editar", rid=nuevo))
+
+    # ---------- líneas de receta
+    @app.post("/recetas/<int:rid>/lineas")
+    def linea_agregar(rid):
+        _, recetas, items, _, _ = _datos()
+        if rid not in recetas:
+            abort(404)
+        try:
+            elegido = request.form.get("componente", "")
+            cantidad = _num("cantidad", minimo=0)
+            if cantidad <= 0:
+                raise ValueError("La cantidad tiene que ser mayor a 0")
+            ing_id = sub_id = None
+            if elegido.startswith("i:"):
+                ing_id = int(elegido[2:])
+            elif elegido.startswith("r:"):
+                sub_id = int(elegido[2:])
+                if sub_id not in recetas or recetas[sub_id]["tipo"] != "subreceta":
+                    raise ValueError("Esa subreceta no existe")
+                if costeo.crearia_ciclo(rid, sub_id, items):
+                    raise ValueError("No se puede: esa subreceta ya contiene a esta receta")
+            else:
+                raise ValueError("Elegí un ingrediente o una subreceta")
+            orden = max([it["orden"] for it in items if it["receta_id"] == rid], default=0) + 1
+            db.ejecutar(
+                "INSERT INTO receta_items (receta_id, ingrediente_id, subreceta_id, cantidad, orden) "
+                "VALUES (?, ?, ?, ?, ?)", (rid, ing_id, sub_id, cantidad, orden))
+        except ValueError as e:
+            flash(str(e), "error")
+        except db.ErrorDeIntegridad:
+            flash("No se pudo agregar: el ingrediente ya no existe", "error")
+        return redirect(url_for("receta", rid=rid) + "#lineas")
+
+    @app.post("/recetas/<int:rid>/lineas/<int:lid>")
+    def linea_editar(rid, lid):
+        try:
+            cantidad = _num("cantidad", minimo=0)
+            if cantidad <= 0:
+                raise ValueError("La cantidad tiene que ser mayor a 0")
+            db.ejecutar("UPDATE receta_items SET cantidad = ? WHERE id = ? AND receta_id = ?",
+                        (cantidad, lid, rid))
+        except ValueError as e:
+            flash(str(e), "error")
+        return redirect(url_for("receta", rid=rid) + "#lineas")
+
+    @app.post("/recetas/<int:rid>/lineas/<int:lid>/borrar")
+    def linea_borrar(rid, lid):
+        db.ejecutar("DELETE FROM receta_items WHERE id = ? AND receta_id = ?", (lid, rid))
+        return redirect(url_for("receta", rid=rid) + "#lineas")
+
+    # ---------- ingredientes
+    @app.get("/ingredientes")
+    def ingredientes():
+        ingredientes, recetas, items, calculo, _ = _datos()
+        filas = [{**i,
+                  "unidad_base": costeo.unidad_base(i["presentacion_unidad"]),
+                  "precio_unitario": calculo["ingredientes"][iid],
+                  "usos": len(_usos_ingrediente(iid, recetas, items))}
+                 for iid, i in ingredientes.items()]
+        return render_template("ingredientes.html", filas=filas)
+
+    def _form_ingrediente():
+        unidad = request.form.get("presentacion_unidad", "g")
+        if unidad not in costeo.UNIDADES_PRESENTACION:
+            raise ValueError("Unidad inválida")
+        cantidad = _num("presentacion_cantidad", minimo=0)
+        precio = _num("precio", minimo=0)
+        if cantidad <= 0:
+            raise ValueError("La presentación tiene que ser mayor a 0")
+        return _texto("nombre"), cantidad, unidad, precio, _texto("notas", False)
+
+    @app.route("/ingredientes/nuevo", methods=["GET", "POST"])
+    def ingrediente_nuevo():
+        if request.method == "POST":
+            try:
+                nombre, cantidad, unidad, precio, notas = _form_ingrediente()
+                iid = db.ejecutar(
+                    "INSERT INTO ingredientes (nombre, presentacion_cantidad, presentacion_unidad, "
+                    "precio, fecha_precio, notas) VALUES (?, ?, ?, ?, ?, ?)",
+                    (nombre, cantidad, unidad, precio, date.today().isoformat(), notas),
+                    devolver_id=True)
+                _registrar_precio(iid, cantidad, unidad, precio)
+                flash(f"Ingrediente «{nombre}» agregado", "ok")
+                if request.form.get("otro"):
+                    return redirect(url_for("ingrediente_nuevo"))
+                return redirect(url_for("ingredientes"))
+            except ValueError as e:
+                flash(str(e), "error")
+            except db.ErrorDeIntegridad:
+                flash("Ya existe un ingrediente con ese nombre", "error")
+        return render_template("ingrediente_form.html", ing=None, form=request.form, historial=[], usos=[])
+
+    @app.route("/ingredientes/<int:iid>", methods=["GET", "POST"])
+    def ingrediente_editar(iid):
+        ing = db.consultar_uno("SELECT * FROM ingredientes WHERE id = ?", (iid,))
+        if not ing:
+            abort(404)
+        if request.method == "POST":
+            try:
+                nombre, cantidad, unidad, precio, notas = _form_ingrediente()
+                if costeo.unidad_base(unidad) != costeo.unidad_base(ing["presentacion_unidad"]):
+                    _, recetas, items, _, _ = _datos()
+                    if _usos_ingrediente(iid, recetas, items):
+                        raise ValueError("No se puede cambiar de g/ml/u: el ingrediente ya se usa en recetas "
+                                         "y las cantidades quedarían mal. Creá uno nuevo.")
+                cambio_precio = (cantidad != ing["presentacion_cantidad"] or unidad != ing["presentacion_unidad"]
+                                 or precio != ing["precio"])
+                fecha = date.today().isoformat() if cambio_precio else ing["fecha_precio"]
+                db.ejecutar(
+                    "UPDATE ingredientes SET nombre=?, presentacion_cantidad=?, presentacion_unidad=?, "
+                    "precio=?, fecha_precio=?, notas=? WHERE id=?",
+                    (nombre, cantidad, unidad, precio, fecha, notas, iid))
+                if cambio_precio:
+                    _registrar_precio(iid, cantidad, unidad, precio)
+                flash("Ingrediente guardado", "ok")
+                return redirect(url_for("ingredientes"))
+            except ValueError as e:
+                flash(str(e), "error")
+            except db.ErrorDeIntegridad:
+                flash("Ya existe un ingrediente con ese nombre", "error")
+        _, recetas, items, _, _ = _datos()
+        historial = db.consultar(
+            "SELECT * FROM precios_historial WHERE ingrediente_id = ? ORDER BY fecha DESC, id DESC LIMIT 12",
+            (iid,))
+        for h in historial:
+            h["precio_unitario"] = costeo.precio_por_unidad_base(h)
+        return render_template("ingrediente_form.html", ing=ing,
+                               form=request.form if request.method == "POST" else None,
+                               historial=historial, usos=_usos_ingrediente(iid, recetas, items))
+
+    @app.post("/ingredientes/<int:iid>/borrar")
+    def ingrediente_borrar(iid):
+        ingredientes, recetas, items, _, _ = _datos()
+        if iid not in ingredientes:
+            abort(404)
+        usos = _usos_ingrediente(iid, recetas, items)
+        if usos:
+            flash("No se puede borrar: se usa en " + ", ".join(usos), "error")
+            return redirect(url_for("ingrediente_editar", iid=iid))
+        db.ejecutar("DELETE FROM ingredientes WHERE id = ?", (iid,))
+        flash(f"Ingrediente «{ingredientes[iid]['nombre']}» borrado", "ok")
+        return redirect(url_for("ingredientes"))
+
+    # ---------- configuración y ejemplo
+    @app.route("/configuracion", methods=["GET", "POST"])
+    def configuracion():
+        if request.method == "POST":
+            try:
+                redondeo = _num("redondeo", minimo=1)
+                db.guardar_config("redondeo", int(redondeo))
+                flash("Configuración guardada", "ok")
+                return redirect(url_for("productos"))
+            except ValueError as e:
+                flash(str(e), "error")
+        return render_template("configuracion.html", redondeo=db.obtener_config("redondeo", "100"))
+
+    @app.post("/ejemplo")
+    def cargar_ejemplo():
+        if db.consultar("SELECT id FROM ingredientes LIMIT 1") or db.consultar("SELECT id FROM recetas LIMIT 1"):
+            flash("El ejemplo solo se carga con la base vacía", "error")
+        else:
+            cargar_datos_ejemplo()
+            flash("Ejemplo cargado. Los precios son inventados: reemplazalos por los tuyos.", "ok")
+        return redirect(url_for("productos"))
+
+
+def cargar_datos_ejemplo():
+    hoy = date.today().isoformat()
+    ingredientes = [
+        ("Harina 000", 1, "kg", 6000), ("Maicena", 1, "kg", 14000), ("Manteca", 200, "g", 10000),
+        ("Azúcar", 1, "kg", 7000), ("Huevo", 30, "u", 30000), ("Leche entera", 1, "l", 8000),
+        ("Bicarbonato de sodio", 100, "g", 3000), ("Polvo de hornear", 100, "g", 4000),
+        ("Esencia de vainilla", 100, "ml", 10000), ("Coco rallado", 100, "g", 6000),
+        ("Bolsita para alfajor", 100, "u", 50000),
+    ]
+    ids = {}
+    for nombre, c, u, p in ingredientes:
+        ids[nombre] = db.ejecutar(
+            "INSERT INTO ingredientes (nombre, presentacion_cantidad, presentacion_unidad, precio, "
+            "fecha_precio, notas) VALUES (?, ?, ?, ?, ?, ?)",
+            (nombre, c, u, p, hoy, "Precio de ejemplo"), devolver_id=True)
+        _registrar_precio(ids[nombre], c, u, p, "ejemplo")
+
+    ddl = db.ejecutar(
+        "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, notas) VALUES (?, ?, ?, ?, ?, ?)",
+        ("Dulce de leche casero", "subreceta", 1000, "g", 0, "Rinde 1 kg después de reducir"),
+        devolver_id=True)
+    alf = db.ejecutar(
+        "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, notas) VALUES (?, ?, ?, ?, ?, ?)",
+        ("Alfajores de maicena", "venta", 30, "u", 3, "Rinde 30 alfajores armados"), devolver_id=True)
+
+    lineas = [
+        (ddl, "Leche entera", None, 2000), (ddl, "Azúcar", None, 600),
+        (ddl, "Bicarbonato de sodio", None, 2), (ddl, "Esencia de vainilla", None, 5),
+        (alf, "Maicena", None, 300), (alf, "Harina 000", None, 200), (alf, "Manteca", None, 200),
+        (alf, "Azúcar", None, 150), (alf, "Huevo", None, 3), (alf, "Polvo de hornear", None, 10),
+        (alf, "Esencia de vainilla", None, 5), (alf, None, ddl, 600), (alf, "Coco rallado", None, 50),
+        (alf, "Bolsita para alfajor", None, 30),
+    ]
+    for orden, (rid, ing, sub, cantidad) in enumerate(lineas, start=1):
+        db.ejecutar(
+            "INSERT INTO receta_items (receta_id, ingrediente_id, subreceta_id, cantidad, orden) "
+            "VALUES (?, ?, ?, ?, ?)", (rid, ids.get(ing) if ing else None, sub, cantidad, orden))
+
+
+app = crear_app()

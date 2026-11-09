@@ -1,0 +1,17 @@
+# Configuración para Render (plan gratuito). Render la lee sola al crear el servicio
+# con "New > Blueprint" desde tu repositorio de GitHub.
+services:
+  - type: web
+    name: artesana
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --preload --workers 2 --timeout 60
+    healthCheckPath: /salud
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true      # Render genera una clave al azar
+      - key: APP_PASSWORD
+        sync: false              # Render te la pide al crear el servicio
+      - key: DATABASE_URL
+        sync: false              # cadena de conexión de Supabase (Session pooler)

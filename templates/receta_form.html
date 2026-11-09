@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set f = form if form else (receta or {}) %}
+{% set tipo_actual = f.get('tipo') or tipo %}
+{% block titulo %}{{ 'Editar ' ~ receta.nombre if receta else 'Nueva receta' }}{% endblock %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('receta', rid=receta.id) if receta else url_for('productos') }}">← Volver</a></p>
+<section class="tarjeta angosta">
+  <h1>{{ 'Editar receta' if receta else ('Nuevo producto' if tipo_actual == 'venta' else 'Nueva subreceta') }}</h1>
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Nombre
+      <input name="nombre" required value="{{ f.get('nombre', '') }}" placeholder="ej. Alfajores de maicena">
+    </label>
+
+    <fieldset class="opciones">
+      <legend>¿Qué es?</legend>
+      <label class="opcion"><input type="radio" name="tipo" value="venta" {{ 'checked' if tipo_actual == 'venta' }}>
+        <span><strong>Para vender</strong><small>Tiene precio de venta</small></span></label>
+      <label class="opcion"><input type="radio" name="tipo" value="subreceta" {{ 'checked' if tipo_actual == 'subreceta' }}>
+        <span><strong>Subreceta</strong><small>Relleno o base que se usa en otras recetas</small></span></label>
+    </fieldset>
+
+    <div class="fila">
+      <label>Rinde por tanda
+        <input name="rinde" required inputmode="decimal" value="{{ f.get('rinde', '')|cant if f.get('rinde') is number else f.get('rinde', '') }}" placeholder="ej. 30">
+      </label>
+      <label>Unidad
+        <select name="unidad_rinde" id="unidad_rinde">
+          {% set u_actual = f.get('unidad_rinde', 'u') %}
+          {% for u in UNIDADES_RINDE_VENTA %}
+          <option value="{{ u }}" {{ 'selected' if u == u_actual }} data-sub="{{ 1 if u in UNIDADES_RINDE_SUBRECETA else 0 }}">{{ u }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <p class="ayuda">Lo que contás o pesás <strong>al terminar</strong>, ya descontado lo que se rompe o se pierde.
+      Ej.: 30 u (alfajores), 1 u (torta entera), 12 porción, 4 caja, 2,4 kg (pan dulce horneado).
+      Una subreceta rinde en g, ml o u (ej. 1000 g de dulce de leche).</p>
+
+    <div id="solo-venta">
+      <div class="fila">
+        <label>Multiplicador
+          <input name="multiplicador" inputmode="decimal" value="{{ f.get('multiplicador', 3)|cant if f.get('multiplicador', 3) is number else f.get('multiplicador') }}">
+        </label>
+        <label>Precio de venta real (opcional)
+          <input name="precio_venta_real" inputmode="decimal" value="{{ (f.get('precio_venta_real')|gs) if f.get('precio_venta_real') is number else (f.get('precio_venta_real') or '') }}" placeholder="Gs">
+        </label>
+      </div>
+      <p class="ayuda">Precio sugerido = costo por unidad × multiplicador. ×3 significa que los ingredientes son un tercio del precio.
+        Si ya tenés un precio decidido, cargalo en «precio real» y vas a ver cuánto ganás.</p>
+    </div>
+
+    <label>Notas (opcional)
+      <textarea name="notas" rows="2">{{ f.get('notas') or '' }}</textarea>
+    </label>
+    <button class="boton">{{ 'Guardar' if receta else 'Crear y cargar ingredientes' }}</button>
+  </form>
+</section>
+<script>
+  const radios = document.querySelectorAll('input[name=tipo]');
+  const soloVenta = document.getElementById('solo-venta');
+  const unidad = document.getElementById('unidad_rinde');
+  function actualizar() {
+    const esVenta = document.querySelector('input[name=tipo]:checked').value === 'venta';
+    soloVenta.hidden = !esVenta;
+    for (const op of unidad.options) op.disabled = !esVenta && op.dataset.sub === '0';
+    if (unidad.selectedOptions[0].disabled) unidad.value = 'g';
+  }
+  radios.forEach(r => r.addEventListener('change', actualizar));
+  actualizar();
+</script>
+{% endblock %}

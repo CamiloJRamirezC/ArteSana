@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block titulo %}Ingredientes{% endblock %}
+{% block contenido %}
+<div class="encabezado">
+  <h1>Ingredientes</h1>
+  <div class="acciones"><a class="boton" href="{{ url_for('ingrediente_nuevo') }}">+ Ingrediente</a></div>
+</div>
+
+<section class="tarjeta">
+  {% if filas %}
+  <input type="search" id="buscar" placeholder="Buscar ingrediente…" class="buscador" aria-label="Buscar ingrediente">
+  <div class="tabla-scroll">
+  <table id="tabla-ingredientes">
+    <thead><tr><th>Ingrediente</th><th class="num">Presentación</th><th class="num">Precio</th>
+      <th class="num">Precio por unidad base</th><th>Actualizado</th><th class="num">Recetas</th></tr></thead>
+    <tbody>
+    {% for i in filas %}
+      <tr>
+        <td><a href="{{ url_for('ingrediente_editar', iid=i.id) }}"><strong>{{ i.nombre }}</strong></a></td>
+        <td class="num">{{ i.presentacion_cantidad|cant }} {{ i.presentacion_unidad }}</td>
+        <td class="num">{{ i.precio|gs }}</td>
+        <td class="num">{% if i.precio_unitario %}{{ i.precio_unitario|gs_unit }} / {{ i.unidad_base }}{% else %}<span class="alerta">sin precio</span>{% endif %}</td>
+        <td>{{ i.fecha_precio or '' }}</td>
+        <td class="num">{{ i.usos }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>Todavía no cargaste ingredientes. <a href="{{ url_for('ingrediente_nuevo') }}">Agregá el primero</a>.</p>
+  {% endif %}
+</section>
+<script>
+  const b = document.getElementById('buscar');
+  if (b) b.addEventListener('input', () => {
+    const t = b.value.toLowerCase();
+    document.querySelectorAll('#tabla-ingredientes tbody tr').forEach(tr => {
+      tr.hidden = !tr.textContent.toLowerCase().includes(t);
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block titulo %}Productos{% endblock %}
+{% block contenido %}
+<div class="encabezado">
+  <h1>Productos</h1>
+  <div class="acciones">
+    <a class="boton" href="{{ url_for('receta_nueva', tipo='venta') }}">+ Producto</a>
+    <a class="boton secundario" href="{{ url_for('receta_nueva', tipo='subreceta') }}">+ Subreceta</a>
+  </div>
+</div>
+
+{% if vacio %}
+<section class="tarjeta">
+  <h2>Empezá por acá</h2>
+  <ol class="pasos">
+    <li>Cargá tus <a href="{{ url_for('ingredientes') }}">ingredientes</a> con lo que pagás por cada presentación.</li>
+    <li>Creá un <strong>producto</strong>: una receta es <em>una tanda</em>, con lo que rinde al terminar.</li>
+    <li>Agregale los ingredientes en gramos, ml o unidades. El costo y el precio salen solos.</li>
+  </ol>
+  <form method="post" action="{{ url_for('cargar_ejemplo') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="boton secundario">Cargar un ejemplo (alfajores y dulce de leche)</button>
+  </form>
+</section>
+{% endif %}
+
+{% if venta %}
+<section class="tarjeta">
+  <h2>Para vender</h2>
+  <div class="tabla-scroll">
+  <table>
+    <thead><tr>
+      <th>Producto</th><th class="num">Rinde</th><th class="num">Costo tanda</th>
+      <th class="num">Costo por unidad</th><th class="num">×</th>
+      <th class="num">Precio de venta</th><th class="num">Ganancia bruta</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for p in venta %}
+      <tr>
+        <td><a href="{{ url_for('receta', rid=p.id) }}"><strong>{{ p.nombre }}</strong></a></td>
+        <td class="num">{{ p.rinde|cant }} {{ p.unidad_rinde }}</td>
+        <td class="num">{{ p.costo_tanda|gs }}</td>
+        <td class="num">{{ p.costo_unitario|gs }}</td>
+        <td class="num">{{ p.multiplicador|cant }}</td>
+        <td class="num"><strong>{{ p.precio_venta|gs }}</strong>
+          {% if p.precio_venta_real %}<span class="etiqueta">real</span>{% endif %}</td>
+        <td class="num">{{ p.ganancia|gs }}</td>
+        <td>{% if p.alertas %}<span class="alerta" title="{{ p.alertas|join(' · ') }}">⚠ {{ p.alertas|length }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="nota">Montos en guaraníes, por unidad de venta. El precio se redondea hacia arriba a {{ redondeo|gs }} Gs
+    (<a href="{{ url_for('configuracion') }}">cambiar</a>). «real» = precio que cargaste a mano.</p>
+</section>
+{% endif %}
+
+{% if subrecetas %}
+<section class="tarjeta">
+  <h2>Subrecetas <small>(rellenos y bases que se usan en otras recetas)</small></h2>
+  <div class="tabla-scroll">
+  <table>
+    <thead><tr>
+      <th>Subreceta</th><th class="num">Rinde</th><th class="num">Costo tanda</th>
+      <th class="num">Costo por g / ml / u</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for s in subrecetas %}
+      <tr>
+        <td><a href="{{ url_for('receta', rid=s.id) }}"><strong>{{ s.nombre }}</strong></a></td>
+        <td class="num">{{ s.rinde|cant }} {{ s.unidad_rinde }}</td>
+        <td class="num">{{ s.costo_tanda|gs }}</td>
+        <td class="num">{{ s.costo_unitario|gs_unit }} / {{ s.unidad_rinde }}</td>
+        <td>{% if s.alertas %}<span class="alerta" title="{{ s.alertas|join(' · ') }}">⚠ {{ s.alertas|length }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

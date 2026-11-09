@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block titulo %}{{ receta.nombre }}{% endblock %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('productos') }}">← Productos</a></p>
+<div class="encabezado">
+  <h1>{{ receta.nombre }}
+    <span class="etiqueta">{{ 'Para vender' if receta.tipo == 'venta' else 'Subreceta' }}</span></h1>
+  <div class="acciones">
+    <a class="boton secundario" href="{{ url_for('receta_editar', rid=receta.id) }}">Editar datos</a>
+    <form method="post" action="{{ url_for('receta_duplicar', rid=receta.id) }}" class="en-linea">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="boton secundario">Duplicar</button>
+    </form>
+  </div>
+</div>
+
+{% for a in res.alertas %}<div class="aviso aviso-error">⚠ {{ a }}</div>{% endfor %}
+
+<section class="resumen">
+  <div class="dato"><span>Rinde por tanda</span><strong>{{ receta.rinde|cant }} {{ receta.unidad_rinde }}</strong></div>
+  <div class="dato"><span>Costo de la tanda</span><strong>{{ res.costo_tanda|gs }} Gs</strong></div>
+  {% if receta.tipo == 'venta' %}
+  <div class="dato"><span>Costo por {{ receta.unidad_rinde }}</span><strong>{{ res.costo_unitario|gs }} Gs</strong></div>
+  <div class="dato destacado"><span>Precio de venta</span><strong>{{ res.precio_venta|gs }} Gs</strong>
+    <small>{% if receta.precio_venta_real %}Precio real cargado · sugerido {{ res.precio_sugerido_redondeado|gs }}
+           {% else %}{{ res.costo_unitario|gs }} × {{ receta.multiplicador|cant }}, redondeado a {{ redondeo|gs }}{% endif %}</small></div>
+  <div class="dato"><span>Ganancia bruta por {{ receta.unidad_rinde }}</span><strong>{{ res.ganancia|gs }} Gs</strong>
+    <small>Ingredientes = {{ res.porcentaje_ingredientes|pct }} del precio{% if receta.precio_venta_real and res.multiplicador_efectivo %} · equivale a ×{{ res.multiplicador_efectivo|cant }}{% endif %}</small></div>
+  {% else %}
+  <div class="dato destacado"><span>Costo por {{ receta.unidad_rinde }}</span><strong>{{ res.costo_unitario|gs_unit }} Gs</strong>
+    <small>Este valor se usa en las recetas que la llevan</small></div>
+  {% endif %}
+</section>
+
+<section class="tarjeta" id="lineas">
+  <h2>Ingredientes de una tanda</h2>
+  {% if res.lineas %}
+  <div class="tabla-scroll">
+  <table>
+    <thead><tr><th>Ingrediente</th><th class="num">Cantidad</th><th class="num solo-ancho">Precio por unidad</th>
+      <th class="num">Costo</th><th class="num solo-ancho">% del total</th><th></th></tr></thead>
+    <tbody>
+    {% for ln in res.lineas %}
+      <tr>
+        <td>{% if ln.origen == 'subreceta' %}<a href="{{ url_for('receta', rid=ln.subreceta_id) }}">{{ ln.nombre }}</a> <span class="etiqueta">subreceta</span>
+            {% else %}<a href="{{ url_for('ingrediente_editar', iid=ln.ingrediente_id) }}">{{ ln.nombre }}</a>{% endif %}</td>
+        <td class="num">
+          <form method="post" action="{{ url_for('linea_editar', rid=receta.id, lid=ln.item_id) }}" class="cantidad-form">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input name="cantidad" value="{{ ln.cantidad|cant }}" inputmode="decimal" aria-label="Cantidad de {{ ln.nombre }}">
+            <span class="unidad">{{ ln.unidad }}</span>
+            <button class="mini" title="Guardar cantidad">✓</button>
+          </form>
+        </td>
+        <td class="num solo-ancho">{{ ln.precio_unitario|gs_unit }} / {{ ln.unidad }}</td>
+        <td class="num">{{ ln.costo|gs }}</td>
+        <td class="num solo-ancho"><span class="barrita" style="--p: {{ (ln.porcentaje * 100)|round(1) }}%"></span>{{ ln.porcentaje|pct }}</td>
+        <td>
+          <form method="post" action="{{ url_for('linea_borrar', rid=receta.id, lid=ln.item_id) }}" class="en-linea"
+                onsubmit="return confirm('¿Quitar {{ ln.nombre }} de la receta?')">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <button class="mini peligro" title="Quitar">✕</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td>Total de la tanda</td><td></td><td class="solo-ancho"></td><td class="num">{{ res.costo_tanda|gs }}</td><td class="solo-ancho"></td><td></td></tr></tfoot>
+  </table>
+  </div>
+  {% else %}
+  <p class="nota">Todavía no tiene ingredientes. Agregá el primero abajo.</p>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('linea_agregar', rid=receta.id) }}" class="agregar-linea">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Agregar
+      <select name="componente" id="componente" required>
+        <option value="">Elegí ingrediente o subreceta…</option>
+        <optgroup label="Ingredientes">
+          {% for i in ingredientes %}
+          <option value="i:{{ i.id }}" data-unidad="{{ unidad_base(i.presentacion_unidad) }}">{{ i.nombre }} ({{ unidad_base(i.presentacion_unidad) }})</option>
+          {% endfor %}
+        </optgroup>
+        {% if subrecetas_posibles %}
+        <optgroup label="Subrecetas">
+          {% for s in subrecetas_posibles %}
+          <option value="r:{{ s.id }}" data-unidad="{{ s.unidad_rinde }}">{{ s.nombre }} ({{ s.unidad_rinde }})</option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+      </select>
+    </label>
+    <label>Cantidad
+      <span class="con-unidad"><input name="cantidad" required inputmode="decimal" placeholder="ej. 250 o 2,5"><span id="unidad-elegida" class="unidad">g/ml/u</span></span>
+    </label>
+    <button class="boton">Agregar</button>
+  </form>
+  <p class="nota">La cantidad va en la unidad del ingrediente: gramos, mililitros o unidades. Si falta un ingrediente,
+    <a href="{{ url_for('ingrediente_nuevo') }}">crealo acá</a>.</p>
+</section>
+
+{% if receta.notas %}<section class="tarjeta"><h2>Notas</h2><p>{{ receta.notas }}</p></section>{% endif %}
+
+{% if usado_en %}<p class="nota">Se usa en: {{ usado_en|join(', ') }}</p>{% endif %}
+
+<form method="post" action="{{ url_for('receta_borrar', rid=receta.id) }}" class="zona-peligro"
+      onsubmit="return confirm('¿Borrar la receta {{ receta.nombre }}? No se puede deshacer.')">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <button class="enlace peligro">Borrar esta receta</button>
+</form>
+
+<script>
+  const sel = document.getElementById('componente');
+  const etiqueta = document.getElementById('unidad-elegida');
+  sel.addEventListener('change', () => {
+    const op = sel.options[sel.selectedIndex];
+    etiqueta.textContent = op.dataset.unidad || 'g/ml/u';
+  });
+</script>
+{% endblock %}

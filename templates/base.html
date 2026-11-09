@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titulo %}ArteSana{% endblock %} · ArteSana</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='estilo.css') }}">
+</head>
+<body>
+  <header class="barra">
+    <a class="marca" href="{{ url_for('productos') }}">ArteSana <span>costos</span></a>
+    {% if not request.endpoint == 'login' %}
+    <nav>
+      <a href="{{ url_for('productos') }}" class="{{ 'activo' if request.endpoint in ('productos','receta','receta_nueva','receta_editar') }}">Productos</a>
+      <a href="{{ url_for('ingredientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('ingrediente') }}">Ingredientes</a>
+      <a href="{{ url_for('configuracion') }}" class="{{ 'activo' if request.endpoint == 'configuracion' }}">Configuración</a>
+      {% if con_login %}
+      <form method="post" action="{{ url_for('logout') }}" class="en-linea">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <button class="enlace">Salir</button>
+      </form>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </header>
+
+  <main>
+    {% with mensajes = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in mensajes %}
+        <div class="aviso aviso-{{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block contenido %}{% endblock %}
+  </main>
+</body>
+</html>

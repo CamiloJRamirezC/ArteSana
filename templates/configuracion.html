@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block titulo %}Configuración{% endblock %}
+{% block contenido %}
+<section class="tarjeta angosta">
+  <h1>Configuración</h1>
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Redondear el precio de venta hacia arriba a (Gs)
+      <input name="redondeo" required inputmode="numeric" value="{{ redondeo }}">
+    </label>
+    <p class="ayuda">Ej.: con 100, un precio sugerido de 5.081 Gs queda en 5.100 Gs. Con 500 quedaría en 5.500 Gs.</p>
+    <button class="boton">Guardar</button>
+  </form>
+</section>
+{% endblock %}
