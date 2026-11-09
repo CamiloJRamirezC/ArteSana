@@ -5,4 +5,5 @@ venv/
 instance/
 *.db
 .env
+artesana.env
 .pytest_cache/

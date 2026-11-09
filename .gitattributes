@@ -1,0 +1,5 @@
+* text=auto
+# Windows necesita fin de línea CRLF en los .bat
+*.bat text eol=crlf
+*.png binary
+*.xlsx binary

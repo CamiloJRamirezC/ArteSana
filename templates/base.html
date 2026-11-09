@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block titulo %}ArteSana{% endblock %} · ArteSana</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='estilo.css') }}">
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <meta name="theme-color" content="#5b2e14">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='iconos/favicon-32.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='iconos/apple-touch-icon.png') }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ArteSana">
 </head>
 <body>
   <header class="barra">
@@ -14,6 +20,7 @@
       <a href="{{ url_for('productos') }}" class="{{ 'activo' if request.endpoint in ('productos','receta','receta_nueva','receta_editar') }}">Productos</a>
       <a href="{{ url_for('ingredientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('ingrediente') }}">Ingredientes</a>
       <a href="{{ url_for('configuracion') }}" class="{{ 'activo' if request.endpoint == 'configuracion' }}">Configuración</a>
+      <button class="instalar" id="boton-instalar" hidden>⤓ Instalar app</button>
       {% if con_login %}
       <form method="post" action="{{ url_for('logout') }}" class="en-linea">
         <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -32,5 +39,30 @@
     {% endwith %}
     {% block contenido %}{% endblock %}
   </main>
+  <script>
+    // App instalable: registra el service worker y muestra el botón "Instalar"
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    }
+    let pedidoInstalacion = null;
+    const botones = ["boton-instalar", "boton-instalar-grande"].map((id) => document.getElementById(id)).filter(Boolean);
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      pedidoInstalacion = e;
+      botones.forEach((b) => (b.hidden = false));
+    });
+    botones.forEach((b) => b.addEventListener("click", async () => {
+      if (!pedidoInstalacion) return;
+      pedidoInstalacion.prompt();
+      await pedidoInstalacion.userChoice;
+      pedidoInstalacion = null;
+      botones.forEach((x) => (x.hidden = true));
+    }));
+    window.addEventListener("appinstalled", () => botones.forEach((b) => (b.hidden = true)));
+    if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone) {
+      const ya = document.getElementById("ya-instalada");
+      if (ya) ya.hidden = false;
+    }
+  </script>
 </body>
 </html>

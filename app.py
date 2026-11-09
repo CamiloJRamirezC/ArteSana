@@ -4,13 +4,14 @@ Ejecutar en tu computadora:   flask --app app run --debug
 En internet (Render):         gunicorn app:app
 """
 import hmac
+import json
 import os
 import secrets
 from datetime import date
-from functools import wraps
+from pathlib import Path
 
-from flask import (Flask, abort, flash, redirect, render_template, request,
-                   session, url_for)
+from flask import (Flask, abort, flash, jsonify, redirect, render_template,
+                   request, send_from_directory, session, url_for)
 
 import costeo
 import db
@@ -26,6 +27,9 @@ def crear_app(config=None):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,
+        # Los define servicio.py cuando la app corre en tu computadora
+        SERVICIO_CONTROL=os.environ.get("ARTESANA_CONTROL", ""),
+        SERVICIO_ESTADO=os.environ.get("ARTESANA_ESTADO", ""),
     )
     if os.environ.get("RENDER") or os.environ.get("SESSION_COOKIE_SECURE") == "1":
         app.config["SESSION_COOKIE_SECURE"] = True
@@ -106,7 +110,7 @@ def registrar_rutas(app):
 
     @app.before_request
     def proteger():
-        if request.endpoint in ("login", "static", "salud"):
+        if request.endpoint in ("login", "static", "salud", "service_worker", "offline", "manifest"):
             return None
         if app.config["APP_PASSWORD"] and not session.get("ok"):
             return redirect(url_for("login", siguiente=request.path))
@@ -115,6 +119,59 @@ def registrar_rutas(app):
             if not hmac.compare_digest(enviado, session.get("csrf", "")):
                 abort(400, "El formulario venció. Volvé atrás y recargá la página.")
         return None
+
+    # ---------- app instalable (PWA)
+    @app.get("/sw.js")
+    def service_worker():
+        resp = send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript", max_age=0)
+        resp.headers["Service-Worker-Allowed"] = "/"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return send_from_directory(app.static_folder, "manifest.webmanifest",
+                                   mimetype="application/manifest+json", max_age=3600)
+
+    @app.get("/offline")
+    def offline():
+        return render_template("offline.html")
+
+    # ---------- servicio local (artesana.bat)
+    def estado_servicio():
+        ruta = app.config["SERVICIO_ESTADO"]
+        if not ruta:
+            return None
+        try:
+            return json.loads(Path(ruta).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    @app.get("/sistema/estado")
+    def sistema_estado():
+        estado = estado_servicio()
+        if estado is None:
+            abort(404)
+        return jsonify(estado)
+
+    @app.post("/sistema/<accion>")
+    def sistema_accion(accion):
+        if accion not in ("actualizar", "reiniciar") or not app.config["SERVICIO_CONTROL"]:
+            abort(404)
+        estado = estado_servicio() or {}
+        control = Path(app.config["SERVICIO_CONTROL"])
+        control.mkdir(parents=True, exist_ok=True)
+        (control / accion).write_text(date.today().isoformat(), encoding="utf-8")
+        return redirect(url_for("sistema_espera", accion=accion,
+                                rev=estado.get("ultima_revision", ""),
+                                ini=estado.get("servidor_iniciado", "")))
+
+    @app.get("/sistema/espera")
+    def sistema_espera():
+        if not app.config["SERVICIO_CONTROL"]:
+            abort(404)
+        return render_template("espera.html", accion=request.args.get("accion", "reiniciar"),
+                               rev=request.args.get("rev", ""), ini=request.args.get("ini", ""))
 
     @app.get("/salud")
     def salud():
@@ -422,7 +479,8 @@ def registrar_rutas(app):
                 return redirect(url_for("productos"))
             except ValueError as e:
                 flash(str(e), "error")
-        return render_template("configuracion.html", redondeo=db.obtener_config("redondeo", "100"))
+        return render_template("configuracion.html", redondeo=db.obtener_config("redondeo", "100"),
+                               sistema=estado_servicio())
 
     @app.post("/ejemplo")
     def cargar_ejemplo():

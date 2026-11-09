@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#5b2e14">
+  <title>ArteSana · sin conexión</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+  <header class="barra"><span class="marca">ArteSana <span>costos</span></span></header>
+  <main>
+    <section class="tarjeta angosta">
+      <img src="/static/iconos/icono-192.png" alt="" width="72" height="72">
+      <h1>La app no está respondiendo</h1>
+      <p>Puede ser que el servicio de ArteSana esté detenido o que la computadora se esté reiniciando.</p>
+      <ul>
+        <li><strong>En esta computadora:</strong> abrí <code>artesana.bat</code> y elegí <strong>1 · Iniciar</strong>.</li>
+        <li><strong>Desde el celular:</strong> fijate que la computadora esté prendida y en la misma red Wi-Fi.</li>
+        <li><strong>Versión en internet:</strong> si recién se despertó, esperá un minuto.</li>
+      </ul>
+      <p class="nota" id="reintento">Se vuelve a intentar sola cada 5 segundos…</p>
+    </section>
+  </main>
+  <script>
+    setInterval(() => {
+      fetch("/salud", { cache: "no-store" }).then((r) => { if (r.ok) location.reload(); }).catch(() => {});
+    }, 5000);
+  </script>
+</body>
+</html>

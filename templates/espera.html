@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block titulo %}{{ 'Actualizando' if accion == 'actualizar' else 'Reiniciando' }}{% endblock %}
+{% block contenido %}
+<section class="tarjeta angosta">
+  <h1 id="titulo">{{ 'Buscando actualizaciones…' if accion == 'actualizar' else 'Reiniciando…' }}</h1>
+  <p id="detalle">Esto tarda unos segundos. La página sigue sola cuando termine.</p>
+  <p><a href="{{ url_for('configuracion') }}" class="nota">Volver a Configuración</a></p>
+</section>
+<script>
+  const accion = {{ accion|tojson }}, revPrevia = {{ rev|tojson }}, iniPrevio = {{ ini|tojson }};
+  const titulo = document.getElementById("titulo"), detalle = document.getElementById("detalle");
+  const inicio = Date.now();
+  let esperandoReinicio = accion === "reiniciar";
+
+  async function revisar() {
+    if (Date.now() - inicio > 180000) {
+      titulo.textContent = "Está tardando más de lo normal";
+      detalle.textContent = "Revisá el registro desde artesana.bat (opción 7).";
+      return;
+    }
+    try {
+      const r = await fetch("{{ url_for('sistema_estado') }}", { cache: "no-store" });
+      if (r.ok) {
+        const e = await r.json();
+        if (accion === "actualizar" && !esperandoReinicio && e.ultima_revision !== revPrevia && e.actualizacion !== "buscando") {
+          detalle.textContent = e.mensaje_actualizacion || "";
+          if (e.actualizacion === "aplicada") {
+            titulo.textContent = "Actualización aplicada. Reiniciando…";
+            esperandoReinicio = true;
+          } else {
+            titulo.textContent = "Listo";
+            setTimeout(() => location.href = "{{ url_for('configuracion') }}", 1500);
+            return;
+          }
+        }
+        if (esperandoReinicio && e.servidor_iniciado && e.servidor_iniciado !== iniPrevio && e.servidor === "corriendo") {
+          titulo.textContent = "Listo";
+          location.href = "{{ url_for('configuracion') }}";
+          return;
+        }
+      }
+    } catch (err) { /* el servidor se está reiniciando */ }
+    setTimeout(revisar, 1500);
+  }
+  setTimeout(revisar, 1500);
+</script>
+{% endblock %}

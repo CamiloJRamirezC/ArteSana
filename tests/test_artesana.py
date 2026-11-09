@@ -212,3 +212,44 @@ def test_flujo_completo(cliente):
     # salir
     post(cliente, "/logout")
     assert cliente.get("/").status_code == 302
+
+
+# ------------------------------------------------------------ app instalable y sistema
+
+def test_pwa_sin_login(cliente):
+    r = cliente.get("/sw.js")
+    assert r.status_code == 200 and r.headers["Service-Worker-Allowed"] == "/"
+    assert "javascript" in r.headers["Content-Type"]
+    r = cliente.get("/manifest.webmanifest")
+    assert r.status_code == 200 and r.get_json()["short_name"] == "ArteSana"
+    assert cliente.get("/offline").status_code == 200
+    assert cliente.get("/static/iconos/icono-512.png").status_code == 200
+
+
+def test_sistema_oculto_sin_servicio(cliente):
+    entrar(cliente)
+    assert "Sistema" not in cliente.get("/configuracion").get_data(as_text=True)
+    assert cliente.get("/sistema/estado").status_code == 404
+    assert post(cliente, "/sistema/reiniciar").status_code == 404
+
+
+def test_sistema_con_servicio(tmp_path):
+    import json
+    control, estado = tmp_path / "control", tmp_path / "estado.json"
+    estado.write_text(json.dumps({"servidor": "corriendo", "servidor_iniciado": "2026-11-09 10:00:00",
+                                  "ultima_revision": "2026-11-09 10:01:00", "mensaje_actualizacion": "Al día con GitHub",
+                                  "version": {"commit": "abc1234", "fecha": "2026-11-09 09:00", "mensaje": "prueba"}}))
+    app = crear_app({"DATABASE_URL": f"sqlite:///{tmp_path / 'test.db'}", "APP_PASSWORD": "",
+                     "SERVICIO_CONTROL": str(control), "SERVICIO_ESTADO": str(estado)})
+    c = app.test_client()
+    with c.session_transaction() as s:
+        s["csrf"] = "tok"
+    html = c.get("/configuracion").get_data(as_text=True)
+    assert "abc1234" in html and "Al día con GitHub" in html
+    assert c.get("/sistema/estado").get_json()["servidor"] == "corriendo"
+    r = c.post("/sistema/reiniciar", data={"csrf": "tok"})
+    assert r.status_code == 302 and (control / "reiniciar").exists()
+    assert c.get(r.headers["Location"]).status_code == 200
+    c.post("/sistema/actualizar", data={"csrf": "tok"})
+    assert (control / "actualizar").exists()
+    assert c.post("/sistema/borrar_todo", data={"csrf": "tok"}).status_code == 404

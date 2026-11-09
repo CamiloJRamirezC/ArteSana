@@ -12,4 +12,45 @@
     <button class="boton">Guardar</button>
   </form>
 </section>
+
+<section class="tarjeta angosta" id="instalar-app">
+  <h2>Instalar como aplicación</h2>
+  <p>Podés instalar ArteSana para abrirla como un programa más, con su ícono, sin barra del navegador.</p>
+  <p><button class="boton" id="boton-instalar-grande" hidden>Instalar ArteSana</button></p>
+  <ul class="nota" id="instalar-ayuda">
+    <li><strong>Chrome / Edge en la PC:</strong> ícono de instalar <span aria-hidden="true">⊕</span> a la derecha de la barra de direcciones, o menú ⋮ → <em>Instalar ArteSana</em>.</li>
+    <li><strong>Android (Chrome):</strong> menú ⋮ → <em>Agregar a la pantalla principal</em>.</li>
+    <li><strong>iPhone (Safari):</strong> botón Compartir → <em>Agregar a inicio</em>.</li>
+  </ul>
+  <p class="nota" id="ya-instalada" hidden>✓ Estás usando la app instalada.</p>
+</section>
+
+{% if sistema is not none %}
+<section class="tarjeta angosta">
+  <h2>Sistema</h2>
+  {% set v = sistema.get('version') or {} %}
+  <table>
+    <tbody>
+      <tr><th>Versión</th><td>{{ v.get('commit') or '—' }} {% if v.get('fecha') %}del {{ v.fecha }}{% endif %}
+        {% if v.get('mensaje') %}<br><small class="nota">{{ v.mensaje }}</small>{% endif %}</td></tr>
+      <tr><th>Servidor</th><td>{{ sistema.get('servidor', '—') }} · desde {{ sistema.get('servidor_iniciado', '—') }}</td></tr>
+      <tr><th>GitHub</th><td>{{ sistema.get('mensaje_actualizacion', 'Todavía no se revisó') }}
+        {% if sistema.get('ultima_revision') %}<br><small class="nota">Revisado {{ sistema.ultima_revision }}</small>{% endif %}</td></tr>
+      <tr><th>Automático</th><td>{% if sistema.get('auto_actualizar') %}Busca y aplica cambios cada {{ sistema.get('intervalo_minutos', 30) }} min{% else %}Solo avisa (AUTO_ACTUALIZAR=0){% endif %}</td></tr>
+    </tbody>
+  </table>
+  <div class="acciones" style="margin-top: 1rem">
+    <form method="post" action="{{ url_for('sistema_accion', accion='actualizar') }}" class="en-linea">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="boton">Buscar y aplicar actualizaciones</button>
+    </form>
+    <form method="post" action="{{ url_for('sistema_accion', accion='reiniciar') }}" class="en-linea"
+          onsubmit="return confirm('¿Reiniciar la app? Tarda unos segundos.')">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="boton secundario">Reiniciar</button>
+    </form>
+  </div>
+  <p class="nota">Antes de cada actualización se guarda una copia de los datos en <code>instance\respaldos</code>.</p>
+</section>
+{% endif %}
 {% endblock %}

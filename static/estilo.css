@@ -31,6 +31,11 @@ nav { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
 nav a, nav .enlace { color: #fff; text-decoration: none; padding: .35rem .7rem; border-radius: 999px; opacity: .85; }
 nav a.activo, nav a:hover { background: rgba(255,255,255,.16); opacity: 1; }
 nav .enlace { color: #fff; }
+.instalar { margin-left: .35rem; border: 1.5px solid rgba(255,255,255,.7); background: transparent; color: #fff;
+  border-radius: 999px; padding: .3rem .8rem; font: inherit; font-size: .9rem; cursor: pointer; }
+.instalar:hover { background: rgba(255,255,255,.16); }
+.instalar[hidden], .boton[hidden] { display: none; }
+code { background: #f3e6d9; padding: .05rem .3rem; border-radius: 4px; font-size: .9em; }
 
 main { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
 .encabezado { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; }

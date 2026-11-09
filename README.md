@@ -3,6 +3,10 @@
 App web para calcular el costo y el precio de venta de cada producto a partir de sus
 recetas. Funciona desde cualquier navegador, en la computadora o el celular.
 
+Se puede usar de dos formas:
+- **En tu computadora con Windows**: con `artesana.bat`, corre en segundo plano y se actualiza sola desde GitHub.
+- **Publicada en internet**: en Render + Supabase, gratis (ver más abajo).
+
 ## Cómo funciona
 
 | Concepto | Regla |
@@ -19,22 +23,79 @@ Los números se escriben al estilo paraguayo: `1.500` es mil quinientos y `2,5` 
 Cada vez que cambiás el precio de un ingrediente queda guardado en su **historial de precios**.
 Ese historial es la base para el paso siguiente: leer los precios del supermercado automáticamente.
 
-## Probarla en tu computadora
+## Usarla en tu computadora con Windows
 
-Necesitás Python 3.10 o más nuevo.
+### Instalación (una sola vez)
+1. Instalá **Python 3.10+** y **Git**. Desde una terminal:
+   ```
+   winget install --id Python.Python.3.12 -e
+   winget install --id Git.Git -e
+   ```
+2. Descargá el proyecto **con git**, así puede actualizarse solo:
+   ```
+   git clone https://github.com/CamiloJRamirezC/ArteSana.git
+   ```
+3. Abrí la carpeta `ArteSana` y hacé doble clic en **`artesana.bat`**. La primera vez instala todo.
+
+### El menú de `artesana.bat`
+
+| Opción | Qué hace |
+|---|---|
+| 1 · Iniciar | Arranca la app **en segundo plano** y la abre en el navegador. Podés cerrar la ventana negra: la app sigue funcionando. |
+| 2 · Abrir | Abre <http://127.0.0.1:5000> en el navegador. |
+| 3 · Reiniciar | Detiene y vuelve a arrancar la app (por ejemplo, después de cambiar `artesana.env`). |
+| 4 · Actualizar | Busca cambios en GitHub y los aplica. |
+| 5 · Detener | Apaga la app. |
+| 6 · Estado | Versión, si está corriendo y cuándo revisó GitHub por última vez. |
+| 7 · Registro | Abre los archivos de log en el Bloc de notas. |
+| 8 · Iniciar con Windows | Activa o desactiva que la app arranque sola al prender la computadora. |
+| 9 · Reinstalar dependencias | Por si algo quedó mal instalado. |
+
+También funciona sin menú: `artesana.bat iniciar`, `artesana.bat detener`, `artesana.bat actualizar`, etc.
+
+### Actualizaciones automáticas
+Mientras está corriendo, el servicio revisa GitHub **cada 30 minutos**. Si hay cambios:
+1. guarda una copia de los datos en `instance\respaldos` (quedan las últimas 10),
+2. baja los cambios,
+3. reinstala dependencias si cambió `requirements.txt`,
+4. reinicia la app.
+
+Si en esa computadora hay archivos del proyecto modificados a mano, **no actualiza** (para no pisarlos) y lo avisa.
+También podés buscar actualizaciones y reiniciar desde la app: **Configuración → Sistema**.
+Si la app se cierra por un error, el servicio la vuelve a levantar sola.
+
+### Instalarla desde el navegador
+Con la app abierta en Chrome o Edge, tocá **«⤓ Instalar app»** arriba a la derecha, o el ícono de instalar
+de la barra de direcciones. Queda como un programa más, con su ícono en el menú Inicio y el escritorio.
+Si la abrís con el servicio detenido, te muestra cómo iniciarlo.
+
+### Configuración (`artesana.env`)
+Se crea sola en la primera instalación. Después de cambiarla, elegí **Reiniciar**.
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `PUERTO` | `5000` | Puerto de la app. |
+| `HOST` | `127.0.0.1` | `0.0.0.0` para entrar también desde el celular en tu Wi-Fi (con `http://IP-de-la-PC:5000`). Windows va a pedir permiso en el firewall. |
+| `APP_PASSWORD` | vacío | Contraseña para entrar. **Ponela si usás `HOST=0.0.0.0`.** |
+| `AUTO_ACTUALIZAR` | `1` | `0` = solo avisa, no aplica. |
+| `INTERVALO_MINUTOS` | `30` | Cada cuánto revisar GitHub. |
+| `DATABASE_URL` | vacío | Vacío = datos en esta PC. Con la de Supabase, comparte los datos con la versión de Render. |
+
+Desde el celular por Wi-Fi la app funciona, pero el celular no la instala como app completa:
+eso exige una conexión segura (https), que sí tiene la versión publicada en Render. Lo que sí podés hacer
+es agregarla a la pantalla de inicio como acceso directo.
+
+### Archivos en esta computadora
+Todo lo que es tuyo queda en la carpeta `instance` y GitHub nunca lo toca: `artesana.db` (tus datos),
+`respaldos\`, `logs\` y `secret_key`.
+
+## Desarrollo
 
 ```bash
-cd artesana
-python -m venv .venv
-# Windows:  .venv\Scripts\activate      Mac/Linux:  source .venv/bin/activate
-pip install -r requirements.txt
-flask --app app run --debug
+python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
+.venv/bin/flask --app app run --debug     # modo desarrollo, se recarga al guardar
+.venv/bin/pytest                          # pruebas automáticas
 ```
-
-Abrí <http://127.0.0.1:5000> y tocá **«Cargar un ejemplo»**. En tu computadora los datos se
-guardan en `instance/artesana.db` y no pide contraseña.
-
-Pruebas automáticas: `pip install pytest` y después `pytest`.
 
 ## Publicarla gratis en internet
 
@@ -84,13 +145,18 @@ proveedor de dominio el registro DNS que Render te muestra.
 ## Archivos
 
 ```
-app.py           rutas y pantallas
-costeo.py        cálculo de costos (sin dependencias, fácil de probar)
-db.py            base de datos: SQLite local / PostgreSQL en internet
-utils.py         lectura y formato de números (1.500 · 2,5)
-templates/       pantallas HTML
-static/          estilos
-tests/           pruebas automáticas
-render.yaml      configuración de Render
-.github/         visita automática para que Supabase no pause la base
+artesana.bat           menú para Windows: instalar, iniciar, actualizar, reiniciar, detener
+servicio.py            servicio en segundo plano: corre la app, la vigila y la actualiza desde GitHub
+servidor.py            servidor web local (waitress)
+artesana.env.ejemplo   configuración local por defecto
+app.py                 rutas y pantallas
+costeo.py              cálculo de costos (sin dependencias, fácil de probar)
+db.py                  base de datos: SQLite local / PostgreSQL en internet
+utils.py               lectura y formato de números (1.500 · 2,5)
+templates/             pantallas HTML
+static/                estilos, íconos, manifest y service worker (app instalable)
+tests/                 pruebas automáticas
+render.yaml            configuración de Render
+.github/               visita automática para que Supabase no pause la base
+planilla/              planilla Excel de referencia
 ```
