@@ -41,6 +41,7 @@
       <tr><th>Servidor</th><td>{{ sistema.get('servidor', '—') }} · desde {{ sistema.get('servidor_iniciado', '—') }}</td></tr>
       <tr><th>GitHub</th><td>{{ sistema.get('mensaje_actualizacion', 'Todavía no se revisó') }}
         {% if sistema.get('ultima_revision') %}<br><small class="nota">Revisado {{ sistema.ultima_revision }}</small>{% endif %}</td></tr>
+      <tr><th>Actualiza con</th><td>{{ 'git' if sistema.get('modo_actualizacion') == 'git' else 'descarga directa desde GitHub (no necesita git)' }}</td></tr>
       <tr><th>Automático</th><td>{% if sistema.get('auto_actualizar') %}Busca y aplica cambios cada {{ sistema.get('intervalo_minutos', 30) }} min{% else %}Solo avisa (AUTO_ACTUALIZAR=0){% endif %}</td></tr>
     </tbody>
   </table>

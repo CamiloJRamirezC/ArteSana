@@ -75,12 +75,6 @@ if errorlevel 1 exit /b 1
 call :dependencias
 if errorlevel 1 exit /b 1
 "%VENV_PY%" servicio.py configurar
-where git >nul 2>nul
-if errorlevel 1 (
-  echo.
-  echo   AVISO: Git no esta instalado. La app funciona, pero no puede buscar
-  echo   actualizaciones en GitHub. Para instalarlo:  winget install --id Git.Git -e
-)
 echo.
 echo   Instalacion terminada.
 echo.

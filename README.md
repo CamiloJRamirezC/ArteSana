@@ -26,16 +26,13 @@ Ese historial es la base para el paso siguiente: leer los precios del supermerca
 ## Usarla en tu computadora con Windows
 
 ### Instalación (una sola vez)
-1. Instalá **Python 3.10+** y **Git**. Desde una terminal:
-   ```
-   winget install --id Python.Python.3.12 -e
-   winget install --id Git.Git -e
-   ```
-2. Descargá el proyecto **con git**, así puede actualizarse solo:
-   ```
-   git clone https://github.com/CamiloJRamirezC/ArteSana.git
-   ```
-3. Abrí la carpeta `ArteSana` y hacé doble clic en **`artesana.bat`**. La primera vez instala todo.
+1. Instalá **Python 3.10+** (desde una terminal: `winget install --id Python.Python.3.12 -e`).
+2. Bajá el proyecto de una de estas dos formas:
+   - **Sin Git:** en GitHub, botón verde **Code → Download ZIP**, y descomprimilo donde quieras.
+   - **Con Git:** `git clone https://github.com/CamiloJRamirezC/ArteSana.git`
+3. Abrí la carpeta y hacé doble clic en **`artesana.bat`**. La primera vez instala todo.
+
+Git es **opcional**: la app se actualiza igual sin Git.
 
 ### El menú de `artesana.bat`
 
@@ -57,7 +54,8 @@ También funciona sin menú: `artesana.bat iniciar`, `artesana.bat detener`, `ar
 ### Actualizaciones automáticas
 Mientras está corriendo, el servicio revisa GitHub **cada 30 minutos**. Si hay cambios:
 1. guarda una copia de los datos en `instance\respaldos` (quedan las últimas 10),
-2. baja los cambios,
+2. baja los cambios: con Git si la carpeta es un clon y Git está instalado (lo busca también donde lo
+   deja GitHub Desktop); si no, descarga la versión nueva directamente de GitHub,
 3. reinstala dependencias si cambió `requirements.txt`,
 4. reinicia la app.
 

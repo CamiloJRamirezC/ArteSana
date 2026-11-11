@@ -54,6 +54,8 @@ DEFAULTS = {
     "AUTO_ACTUALIZAR": "1",
     "INTERVALO_MINUTOS": "30",
     "RAMA": "main",
+    "REPOSITORIO": "CamiloJRamirezC/ArteSana",
+    "GITHUB_TOKEN": "",
     "DATABASE_URL": "",
 }
 LATIDO_MAX = 30          # segundos sin latido = servicio colgado o apagado
@@ -258,11 +260,37 @@ def enviar_orden(accion):
 
 # ------------------------------------------------------------------ git
 
+def buscar_git():
+    """Ruta a git.exe: en el PATH o donde lo dejan el instalador de Git y GitHub Desktop."""
+    exe = shutil.which("git")
+    if exe:
+        return exe
+    if ES_WINDOWS:
+        candidatos = []
+        for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+            if os.environ.get(var):
+                candidatos.append(Path(os.environ[var]) / "Git" / "cmd" / "git.exe")
+        if os.environ.get("LOCALAPPDATA"):
+            local = Path(os.environ["LOCALAPPDATA"])
+            candidatos.append(local / "Programs" / "Git" / "cmd" / "git.exe")
+            candidatos += sorted(local.glob("GitHubDesktop/app-*/resources/app/git/cmd/git.exe"), reverse=True)
+        for c in candidatos:
+            if c.exists():
+                return str(c)
+    return None
+
+
+def modo_actualizacion():
+    """'git' si la carpeta es un clon y hay git; si no, 'zip' (descarga directa de GitHub)."""
+    return "git" if (RAIZ / ".git").exists() and buscar_git() else "zip"
+
+
 def git(*args, timeout=60):
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"   # nunca quedarse esperando una contraseña
+    exe = buscar_git() or "git"
     try:
-        r = subprocess.run(["git", *args], cwd=RAIZ, capture_output=True, text=True,
+        r = subprocess.run([exe, *args], cwd=RAIZ, capture_output=True, text=True,
                            timeout=timeout, env=env, creationflags=SIN_VENTANA,
                            encoding="utf-8", errors="replace")
         return r.returncode, (r.stdout or "").strip() + ("\n" + r.stderr.strip() if r.returncode and r.stderr else "")
@@ -270,13 +298,11 @@ def git(*args, timeout=60):
         return 1, str(e)
 
 
-def hay_git():
-    return shutil.which("git") is not None and (RAIZ / ".git").exists()
-
-
 def version_actual():
-    if not hay_git():
-        return {"commit": "", "fecha": "", "mensaje": ""}
+    if modo_actualizacion() == "zip":
+        v = leer_version_zip()
+        return {"commit": (v.get("sha") or "")[:7], "fecha": v.get("fecha", ""),
+                "mensaje": v.get("mensaje", "") if v.get("sha") else "Versión sin identificar: se completa en la próxima actualización"}
     _, commit = git("rev-parse", "--short", "HEAD")
     _, fecha = git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M")
     _, mensaje = git("log", "-1", "--format=%s")
@@ -307,19 +333,23 @@ def instalar_dependencias():
 
 def revisar(aplicar, cfg):
     """Busca cambios en GitHub y, si aplicar=True, los baja."""
-    res = {"ultima_revision": ahora(), "pendientes": 0, "cambios": [], "aplicada": False}
-    if shutil.which("git") is None:
-        return {**res, "actualizacion": "sin_git",
-                "mensaje_actualizacion": "Git no está instalado: no se pueden buscar actualizaciones"}
-    if not (RAIZ / ".git").exists():
-        return {**res, "actualizacion": "sin_repo",
-                "mensaje_actualizacion": "La carpeta no se descargó con git clone: no se puede actualizar sola"}
+    res = {"ultima_revision": ahora(), "pendientes": 0, "cambios": [], "aplicada": False,
+           "modo_actualizacion": modo_actualizacion()}
+    if res["modo_actualizacion"] == "zip":
+        return revisar_zip(aplicar, cfg, res)
     rama = cfg["RAMA"]
     code, salida = git("fetch", "--quiet", "origin", rama, timeout=120)
     if code:
         log("git fetch falló: " + salida[-400:])
         return {**res, "actualizacion": "error",
                 "mensaje_actualizacion": "No se pudo conectar con GitHub (¿hay internet?)"}
+    if VERSION_ZIP.exists():
+        # Antes se actualizaba por descarga directa y ahora hay git: alinear git con esos archivos
+        anterior = leer_version_zip().get("sha")
+        if anterior and git("cat-file", "-e", anterior + "^{commit}")[0] == 0:
+            git("reset", "--mixed", "--quiet", anterior)
+            log(f"Se pasó de descarga directa a git (versión {anterior[:7]})")
+        VERSION_ZIP.unlink(missing_ok=True)
     _, local = git("rev-parse", "HEAD")
     _, remoto = git("rev-parse", f"origin/{rama}")
     _, cuenta = git("rev-list", "--count", f"HEAD..origin/{rama}")
@@ -347,6 +377,145 @@ def revisar(aplicar, cfg):
     log(f"Actualizado {local[:7]} -> {remoto[:7]} ({pendientes} cambio(s)); respaldo: {respaldo}")
     return {**res, "actualizacion": "aplicada", "cambios": cambios, "aplicada": True,
             "mensaje_actualizacion": f"Actualizado: {pendientes} cambio(s) aplicados"}
+
+
+# ------------------------------------------------------------------ actualización sin git
+
+VERSION_ZIP = INST / "version.json"
+PROTEGIDOS = {"instance", ".venv", "venv", ".git", "artesana.env", "__pycache__", ".pytest_cache"}
+
+
+def _protegido(rel):
+    partes = rel.replace("\\", "/").split("/")
+    return partes[0] in PROTEGIDOS or "__pycache__" in partes
+
+
+def _sha256(datos):
+    import hashlib
+    return hashlib.sha256(datos).hexdigest()
+
+
+def leer_version_zip():
+    try:
+        return json.loads(VERSION_ZIP.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _github(url, cfg):
+    cabeceras = {"User-Agent": "ArteSana-actualizador", "Accept": "application/vnd.github+json"}
+    if cfg.get("GITHUB_TOKEN"):
+        cabeceras["Authorization"] = f"Bearer {cfg['GITHUB_TOKEN']}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=cabeceras), timeout=120) as r:
+        return r.read()
+
+
+def _fecha_local(iso):
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return ""
+
+
+def revisar_zip(aplicar, cfg, res):
+    """Actualiza descargando el ZIP del repositorio: no necesita git."""
+    import io
+    import urllib.error
+    import zipfile
+
+    api = os.environ.get("ARTESANA_GITHUB_API", "https://api.github.com")
+    descargas = os.environ.get("ARTESANA_GITHUB_ZIP", "https://codeload.github.com")
+    repo, rama = cfg["REPOSITORIO"], cfg["RAMA"]
+    try:
+        datos = json.loads(_github(f"{api}/repos/{repo}/commits/{rama}", cfg))
+        sha = datos["sha"]
+        fecha = _fecha_local(datos["commit"]["committer"]["date"])
+        mensaje = datos["commit"]["message"].splitlines()[0]
+    except urllib.error.HTTPError as e:
+        log(f"GitHub respondió {e.code} al consultar {repo}")
+        texto = {404: f"No se encontró el repositorio {repo} (si es privado, cargá GITHUB_TOKEN en artesana.env)",
+                 403: "GitHub limitó las consultas por un rato; se vuelve a intentar más tarde"}.get(
+            e.code, f"GitHub respondió con error {e.code}")
+        return {**res, "actualizacion": "error", "mensaje_actualizacion": texto}
+    except Exception as e:
+        log(f"No se pudo consultar GitHub: {e!r}")
+        return {**res, "actualizacion": "error",
+                "mensaje_actualizacion": "No se pudo conectar con GitHub (¿hay internet?)"}
+
+    actual = leer_version_zip()
+    if actual.get("sha") == sha:
+        return {**res, "actualizacion": "al_dia", "mensaje_actualizacion": "Al día con GitHub"}
+    res["pendientes"] = 1
+    if not aplicar:
+        return {**res, "actualizacion": "disponible",
+                "mensaje_actualizacion": f"Hay una versión nueva en GitHub ({fecha}: {mensaje})"}
+
+    # No pisar archivos que se modificaron a mano después de la última actualización
+    modificados = [rel for rel, h in actual.get("archivos", {}).items()
+                   if (RAIZ / rel).exists() and _sha256((RAIZ / rel).read_bytes()) != h]
+    if modificados:
+        log("No se actualiza; archivos modificados a mano: " + ", ".join(modificados[:10]))
+        return {**res, "actualizacion": "cambios_locales",
+                "mensaje_actualizacion": "Hay archivos modificados en esta computadora (" +
+                                         ", ".join(modificados[:3]) + "); no se actualiza para no pisarlos"}
+
+    try:
+        contenido_zip = _github(f"{descargas}/{repo}/zip/{sha}", cfg)
+        paquete = zipfile.ZipFile(io.BytesIO(contenido_zip))
+        nuevos = {}
+        for info in paquete.infolist():
+            if info.is_dir() or "/" not in info.filename:
+                continue
+            rel = info.filename.split("/", 1)[1]
+            if rel and not _protegido(rel):
+                nuevos[rel] = paquete.read(info)
+    except Exception as e:
+        log(f"No se pudo descargar la actualización: {e!r}")
+        return {**res, "actualizacion": "error",
+                "mensaje_actualizacion": "No se pudo descargar la actualización (¿hay internet?)"}
+    if "servicio.py" not in nuevos or "app.py" not in nuevos:
+        log("El ZIP descargado no parece ser ArteSana; no se aplica")
+        return {**res, "actualizacion": "error", "mensaje_actualizacion": "La descarga no es válida; no se aplicó"}
+
+    respaldo = respaldar_bd()
+    cambios, fallidos, registro = [], [], {}
+    for rel, datos_archivo in nuevos.items():
+        destino = RAIZ / rel
+        registro[rel] = _sha256(datos_archivo)
+        try:
+            if destino.exists() and destino.read_bytes() == datos_archivo:
+                continue
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            temporal = destino.with_name(destino.name + ".nuevo")
+            temporal.write_bytes(datos_archivo)
+            os.replace(temporal, destino)
+            cambios.append(rel)
+        except OSError as e:  # ej. la planilla abierta en Excel
+            fallidos.append(rel)
+            registro[rel] = actual.get("archivos", {}).get(rel, "")
+            log(f"No se pudo reemplazar {rel}: {e}")
+    for rel in actual.get("archivos", {}):
+        if rel not in nuevos and (RAIZ / rel).exists():
+            try:
+                (RAIZ / rel).unlink()
+                cambios.append(rel)
+            except OSError:
+                pass
+
+    INST.mkdir(parents=True, exist_ok=True)
+    VERSION_ZIP.write_text(json.dumps({
+        # Si algo no se pudo copiar, se guarda la versión anterior para reintentar en la próxima revisión
+        "sha": actual.get("sha", "") if fallidos else sha,
+        "fecha": fecha, "mensaje": mensaje, "instalado": ahora(), "archivos": registro,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    if "requirements.txt" in cambios:
+        instalar_dependencias()
+    log(f"Actualizado (descarga directa) a {sha[:7]} - {mensaje}; {len(cambios)} archivo(s); respaldo: {respaldo}")
+    texto = f"Actualizado a la versión del {fecha}"
+    if fallidos:
+        texto += f" (faltó: {', '.join(fallidos[:3])}; se reintenta en la próxima revisión)"
+    return {**res, "actualizacion": "aplicada", "cambios": cambios, "aplicada": True,
+            "mensaje_actualizacion": texto}
 
 
 # ------------------------------------------------------------------ supervisor
@@ -405,7 +574,7 @@ class Supervisor:
         log(f"Servidor iniciado (pid {self.hijo.pid}) en {url_app(cfg)}")
         self.guardar(forzar=True, servidor="corriendo", servidor_pid=self.hijo.pid,
                      servidor_iniciado=ahora(), url=url_app(cfg), host=cfg["HOST"],
-                     url_red=url_red(cfg),
+                     url_red=url_red(cfg), modo_actualizacion=modo_actualizacion(),
                      version=version_actual(), mensaje="")
 
     def parar_app(self):
@@ -654,6 +823,8 @@ def cmd_estado(breve=False):
     decir(f"  Actualización automática: {'sí' if cfg['AUTO_ACTUALIZAR'] == '1' else 'no'}, "
           f"cada {cfg['INTERVALO_MINUTOS']} min, rama {cfg['RAMA']}")
     decir(f"  Visible en: {'solo esta computadora' if es_local(cfg['HOST']) else 'la red local'}")
+    modo = modo_actualizacion()
+    decir(f"  Actualiza con: {'git (' + (buscar_git() or '') + ')' if modo == 'git' else 'descarga directa desde GitHub (no necesita git)'}")
     decir(f"  Contraseña: {'sí' if cfg['APP_PASSWORD'] else 'no'}")
     if corriendo:
         decir(f"  Proceso del servicio: {pid} · iniciado {estado.get('iniciado', '')}")
