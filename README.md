@@ -34,22 +34,35 @@ Ese historial es la base para el paso siguiente: leer los precios del supermerca
 
 Git es **opcional**: la app se actualiza igual sin Git.
 
-### El menú de `artesana.bat`
+### El ícono de ArteSana (junto al reloj)
+Doble clic en **`artesana.bat`** (o en el acceso directo **ArteSana** del escritorio, que se crea solo la primera vez):
+la ventana negra se cierra, la app arranca en segundo plano y aparece el ícono de ArteSana en la bandeja de Windows,
+junto al reloj. Si no lo ves, tocá la flechita **^** de la bandeja; podés arrastrarlo afuera para que quede siempre visible.
+
+- **Clic** en el ícono: abre la app en el navegador.
+- **Clic derecho**: todas las opciones.
 
 | Opción | Qué hace |
 |---|---|
-| 1 · Iniciar | Arranca la app **en segundo plano** y la abre en el navegador. Podés cerrar la ventana negra: la app sigue funcionando. |
-| 2 · Abrir | Abre <http://127.0.0.1:5000> en el navegador. |
-| 3 · Reiniciar | Detiene y vuelve a arrancar la app (por ejemplo, después de cambiar `artesana.env`). |
-| 4 · Actualizar | Busca cambios en GitHub y los aplica. |
-| 5 · Detener | Apaga la app. |
-| 6 · Estado | Versión, si está corriendo y cuándo revisó GitHub por última vez. |
-| 7 · Registro | Abre los archivos de log en el Bloc de notas. |
-| 8 · Iniciar con Windows | Activa o desactiva que la app arranque sola al prender la computadora. |
-| 9 · Reinstalar dependencias | Por si algo quedó mal instalado. |
-| R · Usar desde otros equipos | Revisa y configura todo para entrar desde el celular u otra PC de la misma red (ver abajo). |
+| Estado y versión | Las dos primeras líneas muestran si está funcionando y qué versión tiene. |
+| Iniciar / Detener | Arranca o apaga la app. |
+| Reiniciar | Vuelve a arrancar todo (por ejemplo, después de cambiar `artesana.env`). |
+| Buscar y aplicar actualizaciones | Busca cambios en GitHub y los aplica. |
+| Usar desde otros equipos de la red… | Abre el asistente de red (es lo único que muestra una ventana, porque te hace preguntas). |
+| Copiar dirección para otros equipos | Copia la dirección para pegarla en el celular u otra PC. |
+| Ver registro / Abrir carpeta de datos | Los logs y la carpeta `instance`, donde están tus datos y respaldos. |
+| Más opciones | Iniciar con Windows, crear los accesos directos, reinstalar dependencias, menú en consola. |
+| Salir | Cierra solo el ícono; la app sigue funcionando. |
+| Detener y salir | Apaga la app y cierra el ícono. |
 
-También funciona sin menú: `artesana.bat iniciar`, `artesana.bat detener`, `artesana.bat actualizar`, etc.
+El ícono se ve **de color** cuando la app está funcionando y **gris** cuando está detenida. Muestra un **punto ámbar**
+mientras hace algo y un **punto rojo** si hay un error. También te avisa con una notificación de Windows cuando
+se actualiza, cuando se detiene o cuando algo falla.
+
+**Iniciar con Windows** abre el ícono al prender la computadora, y con él la app.
+
+El menú clásico en consola sigue disponible: `artesana.bat menu`. También funcionan los comandos directos:
+`artesana.bat iniciar`, `artesana.bat detener`, `artesana.bat actualizar`, `artesana.bat red`, etc.
 
 ### Actualizaciones automáticas
 Mientras está corriendo, el servicio revisa GitHub **cada 30 minutos**. Si hay cambios:
@@ -82,7 +95,7 @@ Se crea sola en la primera instalación. Después de cambiarla, elegí **Reinici
 
 ### Usarla desde otros equipos de la red
 Por defecto la app solo se abre en la PC donde corre. Para entrar desde el celular u otra PC,
-abrí `artesana.bat` y elegí **R**. Revisa y arregla, una por una, las cuatro cosas que pueden impedirlo:
+en el ícono de la bandeja: clic derecho → **Usar desde otros equipos de la red…** (o `artesana.bat red`). Revisa y arregla, una por una, las cuatro cosas que pueden impedirlo:
 
 1. **`HOST`**: la cambia a `0.0.0.0` para aceptar conexiones de la red.
 2. **Contraseña**: te pide una, para que no entre cualquiera conectado a tu red.
@@ -161,7 +174,8 @@ proveedor de dominio el registro DNS que Render te muestra.
 ## Archivos
 
 ```
-artesana.bat           menú para Windows: instalar, iniciar, actualizar, reiniciar, detener
+artesana.bat           instala la primera vez y abre el ícono de la bandeja (artesana.bat menu = menú en consola)
+bandeja.py             ícono junto al reloj con todas las opciones
 servicio.py            servicio en segundo plano: corre la app, la vigila y la actualiza desde GitHub
 servidor.py            servidor web local (waitress)
 artesana.env.ejemplo   configuración local por defecto

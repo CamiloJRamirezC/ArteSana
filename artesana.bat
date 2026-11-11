@@ -5,17 +5,31 @@ title ArteSana
 cd /d "%~dp0"
 
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
+set "VENV_PYW=%~dp0.venv\Scripts\pythonw.exe"
 
 if not exist "%VENV_PY%" (
   call :instalar
   if errorlevel 1 goto :error_instalacion
 )
 
-rem Con argumentos se ejecuta directo, sin menu. Ej: artesana.bat iniciar
-if not "%~1"=="" (
-  "%VENV_PY%" servicio.py %*
-  exit /b %errorlevel%
+rem Sin argumentos: abre el icono de la bandeja (junto al reloj) y cierra esta ventana
+if "%~1"=="" goto :bandeja
+
+rem "artesana.bat menu" muestra el menu clasico en la consola
+if /i "%~1"=="menu" goto :menu
+
+rem Con otros argumentos se ejecuta directo. Ej: artesana.bat iniciar
+"%VENV_PY%" servicio.py %*
+exit /b %errorlevel%
+
+:bandeja
+"%VENV_PY%" -c "import pystray, PIL" >nul 2>nul
+if errorlevel 1 (
+  echo   Instalando el componente del icono de la bandeja...
+  call :dependencias
 )
+start "" "%VENV_PYW%" "%~dp0bandeja.py" --abrir
+exit /b 0
 
 :menu
 cls

@@ -13,6 +13,7 @@ Uso:
     python servicio.py log                 muestra el registro
     python servicio.py autoinicio          activa/desactiva el inicio con Windows
     python servicio.py red                 revisa y configura el acceso desde otros equipos
+    python servicio.py accesos             crea accesos directos en el escritorio y el menú Inicio
     python servicio.py configurar          crea artesana.env y la clave secreta
     python servicio.py supervisar          (interno) proceso que queda en segundo plano
 """
@@ -868,34 +869,79 @@ def cmd_log():
     return 0
 
 
+# ------------------------------------------------------------------ accesos directos (Windows)
+
+ICONO_ICO = RAIZ / "static" / "iconos" / "artesana.ico"
+
+
+def _q(texto):
+    """Escapa comillas simples para PowerShell."""
+    return str(texto).replace("'", "''")
+
+
+def carpeta_especial(nombre):
+    """Desktop, Programs (menú Inicio) o Startup, respetando OneDrive y carpetas movidas."""
+    if nombre == "Startup" and os.environ.get("APPDATA"):
+        return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    r = _powershell(f"[Environment]::GetFolderPath('{nombre}')")
+    ruta = (r.stdout or "").strip()
+    return Path(ruta) if ruta else None
+
+
+def crear_acceso(carpeta, argumentos, descripcion, minimizado=False):
+    """Acceso directo «ArteSana» que abre el ícono de la bandeja (sin consola)."""
+    acceso = carpeta / "ArteSana.lnk"
+    script = (
+        f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{_q(acceso)}');"
+        f"$s.TargetPath='{_q(python_sin_ventana())}';"
+        f"$s.Arguments='\"{_q(RAIZ / 'bandeja.py')}\" {_q(argumentos)}';"
+        f"$s.WorkingDirectory='{_q(RAIZ)}';$s.WindowStyle={7 if minimizado else 1};"
+        f"$s.Description='{_q(descripcion)}';"
+        + (f"$s.IconLocation='{_q(ICONO_ICO)},0';" if ICONO_ICO.exists() else "")
+        + "$s.Save()"
+    )
+    r = _powershell(script)
+    if r.returncode or not acceso.exists():
+        log("No se pudo crear el acceso directo: " + (r.stderr or "")[-300:])
+        return False
+    return True
+
+
+def autoinicio_activo():
+    return ES_WINDOWS and (carpeta_especial("Startup") / "ArteSana.lnk").exists()
+
+
 def cmd_autoinicio():
     if not ES_WINDOWS:
         decir("El inicio automático solo está disponible en Windows.")
         return 1
-    carpeta = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    acceso = carpeta / "ArteSana.lnk"
+    acceso = carpeta_especial("Startup") / "ArteSana.lnk"
     if acceso.exists():
         acceso.unlink()
         decir("Inicio automático DESACTIVADO.")
         return 0
-
-    def q(texto):
-        return str(texto).replace("'", "''")
-
-    script = (
-        f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{q(acceso)}');"
-        f"$s.TargetPath='{q(python_sin_ventana())}';"
-        f"$s.Arguments='\"{q(RAIZ / 'servicio.py')}\" iniciar';"
-        f"$s.WorkingDirectory='{q(RAIZ)}';$s.WindowStyle=7;"
-        f"$s.Description='ArteSana en segundo plano';$s.Save()"
-    )
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-                       capture_output=True, text=True)
-    if r.returncode or not acceso.exists():
-        decir("No se pudo crear el acceso directo: " + (r.stderr or "")[-300:])
+    if not crear_acceso(acceso.parent, "", "ArteSana: ícono en la bandeja", minimizado=True):
+        decir("No se pudo crear el acceso directo (mirá el registro).")
         return 1
     decir("Inicio automático ACTIVADO: ArteSana arranca sola al entrar a Windows.")
     return 0
+
+
+def cmd_accesos():
+    """Accesos directos en el escritorio y en el menú Inicio."""
+    if not ES_WINDOWS:
+        decir("Los accesos directos solo están disponibles en Windows.")
+        return 1
+    ok = True
+    for nombre in ("Desktop", "Programs"):
+        carpeta = carpeta_especial(nombre)
+        if carpeta and carpeta.exists():
+            ok = crear_acceso(carpeta, "--abrir", "Abrir ArteSana") and ok
+    if autoinicio_activo():  # que el inicio con Windows también abra el ícono
+        crear_acceso(carpeta_especial("Startup"), "", "ArteSana: ícono en la bandeja", minimizado=True)
+    decir("Accesos directos «ArteSana» creados en el escritorio y en el menú Inicio." if ok
+          else "No se pudieron crear todos los accesos directos (mirá el registro).")
+    return 0 if ok else 1
 
 
 def _powershell(script):
@@ -1066,6 +1112,7 @@ def main(argv):
         "autoinicio": cmd_autoinicio,
         "configurar": cmd_configurar,
         "red": cmd_red,
+        "accesos": cmd_accesos,
     }
     if cmd not in comandos:
         decir(f"Comando desconocido: {cmd}\n{__doc__}")
