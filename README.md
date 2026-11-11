@@ -50,6 +50,7 @@ Ese historial es la base para el paso siguiente: leer los precios del supermerca
 | 7 · Registro | Abre los archivos de log en el Bloc de notas. |
 | 8 · Iniciar con Windows | Activa o desactiva que la app arranque sola al prender la computadora. |
 | 9 · Reinstalar dependencias | Por si algo quedó mal instalado. |
+| R · Usar desde otros equipos | Revisa y configura todo para entrar desde el celular u otra PC de la misma red (ver abajo). |
 
 También funciona sin menú: `artesana.bat iniciar`, `artesana.bat detener`, `artesana.bat actualizar`, etc.
 
@@ -80,6 +81,23 @@ Se crea sola en la primera instalación. Después de cambiarla, elegí **Reinici
 | `AUTO_ACTUALIZAR` | `1` | `0` = solo avisa, no aplica. |
 | `INTERVALO_MINUTOS` | `30` | Cada cuánto revisar GitHub. |
 | `DATABASE_URL` | vacío | Vacío = datos en esta PC. Con la de Supabase, comparte los datos con la versión de Render. |
+
+### Usarla desde otros equipos de la red
+Por defecto la app solo se abre en la PC donde corre. Para entrar desde el celular u otra PC,
+abrí `artesana.bat` y elegí **R**. Revisa y arregla, una por una, las cuatro cosas que pueden impedirlo:
+
+1. **`HOST`**: la cambia a `0.0.0.0` para aceptar conexiones de la red.
+2. **Contraseña**: te pide una, para que no entre cualquiera conectado a tu red.
+3. **Firewall de Windows**: abre el puerto (Windows pide permiso de administrador).
+   Como el servicio corre oculto, Windows muchas veces no muestra su aviso y bloquea en silencio.
+4. **Tipo de red**: si tu Wi-Fi está marcado como *red pública*, Windows bloquea todo lo que entra.
+   Te ofrece marcarlo como *privada* (hacelo solo en tu red de confianza).
+
+Al final te muestra la dirección para usar en el otro equipo, por ejemplo `http://192.168.1.20:5000`.
+También la ves en la app, en **Configuración → Sistema**.
+
+En el otro equipo **no** uses `127.0.0.1`: esa dirección siempre apunta al propio equipo.
+Si la IP de la PC cambia (pasa al reiniciar el router), conviene fijarla en el router (reserva DHCP).
 
 Desde el celular por Wi-Fi la app funciona, pero el celular no la instala como app completa:
 eso exige una conexión segura (https), que sí tiene la versión publicada en Render. Lo que sí podés hacer

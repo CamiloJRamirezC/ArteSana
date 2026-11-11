@@ -12,6 +12,7 @@ Uso:
     python servicio.py abrir               abre la app en el navegador
     python servicio.py log                 muestra el registro
     python servicio.py autoinicio          activa/desactiva el inicio con Windows
+    python servicio.py red                 revisa y configura el acceso desde otros equipos
     python servicio.py configurar          crea artesana.env y la clave secreta
     python servicio.py supervisar          (interno) proceso que queda en segundo plano
 """
@@ -100,6 +101,48 @@ def leer_config():
 def url_app(cfg=None):
     cfg = cfg or leer_config()
     return f"http://127.0.0.1:{cfg['PUERTO']}"
+
+
+def es_local(host):
+    return host in ("127.0.0.1", "localhost", "::1", "")
+
+
+def ip_local():
+    """IP de esta PC en la red (no envía datos: solo elige la interfaz de salida)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return ""
+    finally:
+        s.close()
+
+
+def url_red(cfg=None):
+    cfg = cfg or leer_config()
+    if es_local(cfg["HOST"]):
+        return ""
+    ip = ip_local() if cfg["HOST"] in ("0.0.0.0", "::") else cfg["HOST"]
+    return f"http://{ip}:{cfg['PUERTO']}" if ip else ""
+
+
+def guardar_en_env(clave, valor):
+    """Cambia (o agrega) una línea CLAVE=valor en artesana.env sin tocar el resto."""
+    if not ENV_FILE.exists():
+        cmd_configurar()
+    lineas = ENV_FILE.read_text(encoding="utf-8-sig").splitlines() if ENV_FILE.exists() else []
+    nueva, hecho = f"{clave}={valor}", False
+    for i, linea in enumerate(lineas):
+        if linea.strip().split("=", 1)[0].strip().upper() == clave and not linea.strip().startswith("#"):
+            lineas[i], hecho = nueva, True
+    if not hecho:
+        lineas.append(nueva)
+    ENV_FILE.write_text("\n".join(lineas) + "\n", encoding="utf-8")
 
 
 def clave_secreta():
@@ -362,6 +405,7 @@ class Supervisor:
         log(f"Servidor iniciado (pid {self.hijo.pid}) en {url_app(cfg)}")
         self.guardar(forzar=True, servidor="corriendo", servidor_pid=self.hijo.pid,
                      servidor_iniciado=ahora(), url=url_app(cfg), host=cfg["HOST"],
+                     url_red=url_red(cfg),
                      version=version_actual(), mensaje="")
 
     def parar_app(self):
@@ -603,11 +647,13 @@ def cmd_estado(breve=False):
         decir(f"  Versión: {v['commit']} del {v.get('fecha', '')}")
     if estado.get("mensaje_actualizacion"):
         decir(f"  GitHub: {estado['mensaje_actualizacion']} (revisado {estado.get('ultima_revision', '')})")
+    if corriendo and url_red(cfg):
+        decir(f"  Desde otros equipos: {url_red(cfg)}")
     if breve:
         return 0
     decir(f"  Actualización automática: {'sí' if cfg['AUTO_ACTUALIZAR'] == '1' else 'no'}, "
           f"cada {cfg['INTERVALO_MINUTOS']} min, rama {cfg['RAMA']}")
-    decir(f"  Visible en: {'solo esta computadora' if cfg['HOST'] in ('127.0.0.1', 'localhost') else 'la red local'}")
+    decir(f"  Visible en: {'solo esta computadora' if es_local(cfg['HOST']) else 'la red local'}")
     decir(f"  Contraseña: {'sí' if cfg['APP_PASSWORD'] else 'no'}")
     if corriendo:
         decir(f"  Proceso del servicio: {pid} · iniciado {estado.get('iniciado', '')}")
@@ -664,6 +710,155 @@ def cmd_autoinicio():
     return 0
 
 
+def _powershell(script):
+    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                          capture_output=True, text=True, errors="replace", creationflags=SIN_VENTANA)
+
+
+def _como_admin(programa, argumentos):
+    """Ejecuta un programa pidiendo permiso de administrador (ventana de UAC) y espera que termine."""
+    argumentos = argumentos.replace("'", "''")
+    return _powershell(f"Start-Process -FilePath '{programa}' -Verb RunAs -Wait -WindowStyle Hidden "
+                       f"-ArgumentList '{argumentos}'")
+
+
+def nombre_regla(puerto):
+    return f"ArteSana-{puerto}"
+
+
+def firewall_regla_existe(puerto):
+    r = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={nombre_regla(puerto)}"],
+                       capture_output=True, text=True, errors="replace", creationflags=SIN_VENTANA)
+    return r.returncode == 0
+
+
+def perfiles_de_red():
+    """[(alias, 'Public'|'Private'|'DomainAuthenticated', indice)] de las conexiones activas."""
+    r = _powershell("Get-NetConnectionProfile | ForEach-Object { $_.InterfaceAlias + '|' + "
+                    "$_.NetworkCategory + '|' + $_.InterfaceIndex }")
+    perfiles = []
+    for linea in (r.stdout or "").splitlines():
+        partes = linea.strip().split("|")
+        if len(partes) == 3:
+            perfiles.append((partes[0], partes[1], partes[2]))
+    return perfiles
+
+
+def preguntar(texto, defecto="s"):
+    try:
+        resp = input(f"  {texto} [{'S/n' if defecto == 's' else 's/N'}]: ").strip().lower()
+    except EOFError:
+        return defecto == "s"
+    return (resp or defecto).startswith("s")
+
+
+def cmd_red():
+    """Diagnostica y configura el acceso desde otros equipos de la misma red."""
+    cmd_configurar()
+    cfg = leer_config()
+    puerto = cfg["PUERTO"]
+    ip = ip_local()
+    decir("  Acceso desde otros equipos (celular, otra PC) en la misma red")
+    decir("  ------------------------------------------------------------")
+    decir(f"  IP de esta PC: {ip or 'no se pudo detectar'}")
+
+    problemas = []
+    if es_local(cfg["HOST"]):
+        decir("  [X] La app solo acepta conexiones de esta misma PC (HOST=127.0.0.1)")
+        problemas.append("host")
+    else:
+        decir(f"  [OK] La app acepta conexiones de la red (HOST={cfg['HOST']})")
+    if not cfg["APP_PASSWORD"]:
+        decir("  [!] No tiene contraseña: cualquiera en tu red podría entrar")
+        problemas.append("password")
+    else:
+        decir("  [OK] Tiene contraseña")
+
+    perfiles = []
+    if ES_WINDOWS:
+        if firewall_regla_existe(puerto):
+            decir(f"  [OK] El Firewall de Windows permite el puerto {puerto} (regla «{nombre_regla(puerto)}»)")
+        else:
+            decir(f"  [X] El Firewall de Windows no tiene permitido el puerto {puerto}")
+            problemas.append("firewall")
+        perfiles = perfiles_de_red()
+        publicas = [p for p in perfiles if p[1] == "Public"]
+        for alias, categoria, _ in perfiles:
+            nombre = {"Public": "PÚBLICA", "Private": "privada", "DomainAuthenticated": "de dominio"}.get(categoria, categoria)
+            decir(f"  [{'X' if categoria == 'Public' else 'OK'}] Red «{alias}»: {nombre}")
+        if publicas:
+            problemas.append("publica")
+
+    corriendo, _ = servicio_corriendo()
+    if corriendo and not es_local(cfg["HOST"]) and ip:
+        try:
+            with urllib.request.urlopen(f"http://{ip}:{puerto}/salud", timeout=3) as r:
+                decir(f"  [OK] La app responde en http://{ip}:{puerto}")
+        except Exception:
+            decir(f"  [X] La app no responde en http://{ip}:{puerto}")
+    elif not corriendo:
+        decir("  [!] La app no está corriendo")
+
+    if not problemas:
+        decir("")
+        decir(f"  Todo listo. Desde el otro equipo abrí:  http://{ip}:{puerto}")
+        decir("  Si igual no abre: fijate que los dos equipos estén en la misma red (mismo Wi-Fi/router)")
+        decir("  y que no haya un antivirus con firewall propio (ESET, Kaspersky, Avast...).")
+        return 0
+
+    decir("")
+    if not preguntar("¿Configurar ahora para que se pueda entrar desde otros equipos?"):
+        return 0
+    reiniciar = False
+
+    if "host" in problemas:
+        guardar_en_env("HOST", "0.0.0.0")
+        decir("  - HOST=0.0.0.0 guardado en artesana.env")
+        reiniciar = True
+
+    if "password" in problemas:
+        import getpass
+        decir("  Elegí una contraseña para entrar a la app (no se ve mientras escribís).")
+        decir("  Dejala vacía y apretá Enter si no querés contraseña.")
+        try:
+            clave = getpass.getpass("  Contraseña: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            clave = ""
+        if clave:
+            guardar_en_env("APP_PASSWORD", clave)
+            decir("  - Contraseña guardada")
+            reiniciar = True
+
+    if "firewall" in problemas:
+        decir("  - Windows va a pedir permiso de administrador para abrir el puerto en el Firewall…")
+        _como_admin("netsh", f"advfirewall firewall add rule name={nombre_regla(puerto)} dir=in "
+                             f"action=allow protocol=TCP localport={puerto} profile=private,domain")
+        if firewall_regla_existe(puerto):
+            decir(f"  - Puerto {puerto} permitido en redes privadas")
+        else:
+            decir("  - No se pudo crear la regla (¿se canceló el permiso?). Volvé a intentar con la opción R.")
+
+    if "publica" in problemas:
+        decir("")
+        decir("  Tu conexión está marcada como red PÚBLICA. Windows bloquea las conexiones")
+        decir("  entrantes en redes públicas. En tu casa o negocio conviene marcarla como PRIVADA.")
+        if preguntar("¿Marcar la red como privada? (solo si es tu red de confianza)"):
+            for alias, categoria, indice in perfiles:
+                if categoria == "Public":
+                    _como_admin("powershell", f"-NoProfile -Command Set-NetConnectionProfile "
+                                              f"-InterfaceIndex {indice} -NetworkCategory Private")
+            decir("  - Listo" if not any(p[1] == "Public" for p in perfiles_de_red())
+                  else "  - No se pudo cambiar. Hacelo a mano: Configuración de Windows → Red e Internet → "
+                       "Wi-Fi o Ethernet → tu red → Tipo de perfil de red: Privada")
+
+    if reiniciar:
+        decir("")
+        cmd_reiniciar() if servicio_corriendo()[0] else cmd_iniciar()
+    decir("")
+    decir(f"  Desde el otro equipo abrí:  http://{ip_local()}:{leer_config()['PUERTO']}")
+    return 0
+
+
 def main(argv):
     if not argv:
         decir(__doc__)
@@ -682,6 +877,7 @@ def main(argv):
         "log": cmd_log,
         "autoinicio": cmd_autoinicio,
         "configurar": cmd_configurar,
+        "red": cmd_red,
     }
     if cmd not in comandos:
         decir(f"Comando desconocido: {cmd}\n{__doc__}")

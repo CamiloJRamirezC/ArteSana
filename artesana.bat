@@ -35,9 +35,10 @@ echo   [6] Ver estado completo
 echo   [7] Ver registro (log)
 echo   [8] Iniciar con Windows (activar / desactivar)
 echo   [9] Reinstalar dependencias
+echo   [R] Usar desde otros equipos de la red (celular, otra PC)
 echo   [0] Salir (la app sigue corriendo en segundo plano)
 echo.
-choice /c 1234567890 /n /m "  Elegi una opcion: "
+choice /c 1234567890R /n /m "  Elegi una opcion: "
 set "OP=%errorlevel%"
 echo.
 if "%OP%"=="10" exit /b 0
@@ -50,6 +51,7 @@ if "%OP%"=="6" "%VENV_PY%" servicio.py estado
 if "%OP%"=="7" "%VENV_PY%" servicio.py log
 if "%OP%"=="8" "%VENV_PY%" servicio.py autoinicio
 if "%OP%"=="9" call :dependencias
+if "%OP%"=="11" "%VENV_PY%" servicio.py red
 echo.
 pause
 goto :menu

@@ -33,6 +33,11 @@
     <tbody>
       <tr><th>Versión</th><td>{{ v.get('commit') or '—' }} {% if v.get('fecha') %}del {{ v.fecha }}{% endif %}
         {% if v.get('mensaje') %}<br><small class="nota">{{ v.mensaje }}</small>{% endif %}</td></tr>
+      {% if sistema.get('url_red') %}
+      <tr><th>Otros equipos</th><td><strong>{{ sistema.url_red }}</strong><br><small class="nota">Abrila así desde el celular u otra PC conectada a la misma red</small></td></tr>
+      {% else %}
+      <tr><th>Otros equipos</th><td>Solo se abre en esta PC.<br><small class="nota">Para usarla desde el celular u otra PC: <code>artesana.bat</code> → opción <strong>R</strong></small></td></tr>
+      {% endif %}
       <tr><th>Servidor</th><td>{{ sistema.get('servidor', '—') }} · desde {{ sistema.get('servidor_iniciado', '—') }}</td></tr>
       <tr><th>GitHub</th><td>{{ sistema.get('mensaje_actualizacion', 'Todavía no se revisó') }}
         {% if sistema.get('ultima_revision') %}<br><small class="nota">Revisado {{ sistema.ultima_revision }}</small>{% endif %}</td></tr>
