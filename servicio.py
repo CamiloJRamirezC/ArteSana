@@ -623,10 +623,16 @@ class Supervisor:
             "pid": os.getpid(), "iniciado": ahora(),
             "auto_actualizar": cfg["AUTO_ACTUALIZAR"] == "1",
             "intervalo_minutos": int(cfg["INTERVALO_MINUTOS"] or 30),
-            **{k: anterior[k] for k in ("ultima_revision", "actualizacion", "mensaje_actualizacion",
-                                        "pendientes") if k in anterior},
+            "modo_actualizacion": modo_actualizacion(),
+            # No se arrastra el mensaje anterior: puede venir de una versión vieja del servicio
+            "ultima_revision": anterior.get("ultima_revision", ""),
+            "actualizacion": "pendiente",
+            "mensaje_actualizacion": "Se revisa GitHub en unos segundos…",
         }
-        proxima_revision = time.time() + 20
+        # Si alguien reemplaza servicio.py en disco (actualización manual), el servicio se relanza solo
+        archivo_servicio = RAIZ / "servicio.py"
+        firma_servicio = archivo_servicio.stat().st_mtime if archivo_servicio.exists() else 0
+        proxima_revision = time.time() + 8
         salida = "detener"
         try:
             self.lanzar_app()
@@ -651,7 +657,18 @@ class Supervisor:
                         break
                     proxima_revision = time.time() + int(cfg["INTERVALO_MINUTOS"] or 30) * 60
                 elif "reiniciar" in ordenes:
-                    self.reiniciar_app("pedido del usuario")
+                    # Se relanza el servicio completo (no solo la web) para cargar cualquier código nuevo
+                    log("Orden recibida: reiniciar (servicio completo)")
+                    salida = "relanzar"
+                    break
+
+                try:
+                    if archivo_servicio.stat().st_mtime != firma_servicio:
+                        log("servicio.py cambió en disco: se relanza el servicio con el código nuevo")
+                        salida = "relanzar"
+                        break
+                except OSError:
+                    pass
 
                 if self.hijo is not None and self.hijo.poll() is not None:
                     codigo = self.hijo.returncode
