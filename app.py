@@ -15,6 +15,7 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template,
 
 import costeo
 import db
+import fuentes
 import importexport
 from utils import cant, gs, gs_unit, parse_num, pct
 
@@ -532,6 +533,46 @@ def registrar_rutas(app):
         flash(f"Guardado: {nuevos} nuevo(s), {actualizados} actualizado(s)", "ok")
         return jsonify({"ok": True, "nuevos": nuevos, "actualizados": actualizados})
 
+    # ---------- precio sugerido por el súper
+    CAMPOS_SUGERENCIA = ("fuente", "id", "nombre", "url", "precio", "oferta", "cant", "unidad")
+
+    def _sugerencia(origen):
+        """Producto del súper elegido en la búsqueda (viene en la URL o en campos ocultos del formulario)."""
+        if not origen.get("sup_id"):
+            return None
+        s = {c: origen.get(f"sup_{c}", "") for c in CAMPOS_SUGERENCIA}
+        s["fuente"] = s["fuente"] if s["fuente"] in fuentes.FUENTES else "supermas"
+        s["fuente_nombre"] = fuentes.fuente(s["fuente"]).nombre
+        for c in ("precio", "oferta", "cant"):
+            try:
+                s[c] = float(s[c]) if s[c] not in ("", None) else None
+            except ValueError:
+                s[c] = None
+        if s["unidad"] not in costeo.UNIDADES_PRESENTACION:
+            s["unidad"] = None
+        if s["url"] and not s["url"].startswith(fuentes.fuente(s["fuente"]).base):
+            s["url"] = ""
+        return s
+
+    def _prellenar(ing, sug, nombre=None):
+        """Valores del formulario: los del ingrediente con la presentación y el precio sugeridos encima."""
+        base = dict(ing or {})
+        if nombre and not base.get("nombre"):
+            base["nombre"] = nombre
+        if sug:
+            if sug["cant"] and sug["unidad"]:
+                base["presentacion_cantidad"], base["presentacion_unidad"] = sug["cant"], sug["unidad"]
+            if sug["precio"]:
+                base["precio"] = sug["precio"]
+        return base
+
+    def _vincular(iid, sug, precio_guardado):
+        hoy = date.today().isoformat()
+        db.ejecutar("UPDATE ingredientes SET fuente=?, fuente_id=?, fuente_nombre=?, fuente_url=?, fuente_precio=?, "
+                    "fuente_oferta=?, fuente_fecha=? WHERE id=?",
+                    (sug["fuente"], str(sug["id"]), sug["nombre"], sug["url"], sug["precio"], sug["oferta"], hoy, iid))
+        return "supermas" if precio_guardado in (sug["precio"], sug["oferta"]) else "manual"
+
     def _form_ingrediente():
         unidad = request.form.get("presentacion_unidad", "g")
         if unidad not in costeo.UNIDADES_PRESENTACION:
@@ -547,13 +588,16 @@ def registrar_rutas(app):
         if request.method == "POST":
             try:
                 nombre, cantidad, unidad, precio, notas = _form_ingrediente()
-                iid = db.ejecutar(
-                    "INSERT INTO ingredientes (nombre, presentacion_cantidad, presentacion_unidad, "
-                    "precio, fecha_precio, notas) VALUES (?, ?, ?, ?, ?, ?)",
-                    (nombre, cantidad, unidad, precio, date.today().isoformat(), notas),
-                    devolver_id=True)
-                _registrar_precio(iid, cantidad, unidad, precio)
-                flash(f"Ingrediente «{nombre}» agregado", "ok")
+                sug = _sugerencia(request.form)
+                with db.lote():
+                    iid = db.ejecutar(
+                        "INSERT INTO ingredientes (nombre, presentacion_cantidad, presentacion_unidad, "
+                        "precio, fecha_precio, notas) VALUES (?, ?, ?, ?, ?, ?)",
+                        (nombre, cantidad, unidad, precio, date.today().isoformat(), notas),
+                        devolver_id=True)
+                    origen = _vincular(iid, sug, precio) if sug else "manual"
+                    _registrar_precio(iid, cantidad, unidad, precio, origen)
+                flash(f"Ingrediente «{nombre}» agregado" + (f", vinculado a {sug['fuente_nombre']}" if sug else ""), "ok")
                 if request.form.get("otro"):
                     return redirect(url_for("ingrediente_nuevo"))
                 return redirect(url_for("ingredientes"))
@@ -561,7 +605,9 @@ def registrar_rutas(app):
                 flash(str(e), "error")
             except db.ErrorDeIntegridad:
                 flash("Ya existe un ingrediente con ese nombre", "error")
-        return render_template("ingrediente_form.html", ing=None, form=request.form, historial=[], usos=[])
+        sug = _sugerencia(request.form if request.method == "POST" else request.args)
+        form = request.form if request.method == "POST" else _prellenar(None, sug, request.args.get("nombre"))
+        return render_template("ingrediente_form.html", ing=None, form=form, historial=[], usos=[], sugerencia=sug)
 
     @app.route("/ingredientes/<int:iid>", methods=["GET", "POST"])
     def ingrediente_editar(iid):
@@ -579,13 +625,16 @@ def registrar_rutas(app):
                 cambio_precio = (cantidad != ing["presentacion_cantidad"] or unidad != ing["presentacion_unidad"]
                                  or precio != ing["precio"])
                 fecha = date.today().isoformat() if cambio_precio else ing["fecha_precio"]
-                db.ejecutar(
-                    "UPDATE ingredientes SET nombre=?, presentacion_cantidad=?, presentacion_unidad=?, "
-                    "precio=?, fecha_precio=?, notas=? WHERE id=?",
-                    (nombre, cantidad, unidad, precio, fecha, notas, iid))
-                if cambio_precio:
-                    _registrar_precio(iid, cantidad, unidad, precio)
-                flash("Ingrediente guardado", "ok")
+                sug = _sugerencia(request.form)
+                with db.lote():
+                    db.ejecutar(
+                        "UPDATE ingredientes SET nombre=?, presentacion_cantidad=?, presentacion_unidad=?, "
+                        "precio=?, fecha_precio=?, notas=? WHERE id=?",
+                        (nombre, cantidad, unidad, precio, fecha, notas, iid))
+                    origen = _vincular(iid, sug, precio) if sug else "manual"
+                    if cambio_precio:
+                        _registrar_precio(iid, cantidad, unidad, precio, origen)
+                flash("Ingrediente guardado" + (f" y vinculado a {sug['fuente_nombre']}" if sug else ""), "ok")
                 return redirect(url_for("ingredientes"))
             except ValueError as e:
                 flash(str(e), "error")
@@ -597,9 +646,12 @@ def registrar_rutas(app):
             (iid,))
         for h in historial:
             h["precio_unitario"] = costeo.precio_por_unidad_base(h)
-        return render_template("ingrediente_form.html", ing=ing,
-                               form=request.form if request.method == "POST" else None,
-                               historial=historial, usos=_usos_ingrediente(iid, recetas, items))
+        sug = _sugerencia(request.form if request.method == "POST" else request.args)
+        form = request.form if request.method == "POST" else (_prellenar(ing, sug) if sug else None)
+        return render_template("ingrediente_form.html", ing=ing, form=form, sugerencia=sug,
+                               historial=historial, usos=_usos_ingrediente(iid, recetas, items),
+                               precio_unitario=costeo.precio_por_unidad_base(ing),
+                               unidad_base=costeo.unidad_base(ing["presentacion_unidad"]))
 
     @app.post("/ingredientes/<int:iid>/borrar")
     def ingrediente_borrar(iid):
@@ -613,6 +665,126 @@ def registrar_rutas(app):
         db.ejecutar("DELETE FROM ingredientes WHERE id = ?", (iid,))
         flash(f"Ingrediente «{ingredientes[iid]['nombre']}» borrado", "ok")
         return redirect(url_for("ingredientes"))
+
+    # ---------- supermercado: buscar, vincular, consultar
+    @app.get("/super/buscar")
+    def super_buscar():
+        q = (request.args.get("q") or "").strip()
+        iid = request.args.get("iid", type=int)
+        ing = db.consultar_uno("SELECT * FROM ingredientes WHERE id = ?", (iid,)) if iid else None
+        fuente = fuentes.fuente(request.args.get("fuente", "supermas"))
+        productos, total, error = [], 0, None
+        if q:
+            try:
+                productos, total = fuente.buscar(q)
+            except fuentes.ErrorDeFuente as e:
+                error = str(e)
+        # el más barato por g / ml / u entre los que tienen la misma unidad que el ingrediente
+        base_ing = costeo.unidad_base(ing["presentacion_unidad"]) if ing else None
+        comparables = [p for p in productos if p.precio_unitario and (not base_ing or p.unidad_base == base_ing)]
+        mas_barato = min(comparables, key=lambda p: p.precio_unitario).id if comparables else None
+        return render_template("super_buscar.html", q=q, ing=ing, productos=productos, total=total, error=error,
+                               fuente=fuente, mas_barato=mas_barato, base_ing=base_ing,
+                               precio_unitario_ing=costeo.precio_por_unidad_base(ing) if ing else None,
+                               nombre_nuevo=request.args.get("nombre", ""))
+
+    @app.post("/ingredientes/<int:iid>/desvincular")
+    def ingrediente_desvincular(iid):
+        db.ejecutar("UPDATE ingredientes SET fuente=NULL, fuente_id=NULL, fuente_nombre=NULL, fuente_url=NULL, "
+                    "fuente_precio=NULL, fuente_oferta=NULL, fuente_fecha=NULL WHERE id=?", (iid,))
+        flash("Se quitó el vínculo con el súper. El precio quedó como estaba.", "ok")
+        return redirect(url_for("ingrediente_editar", iid=iid))
+
+    @app.get("/ingredientes/super")
+    def super_actualizar():
+        ingredientes, recetas, items, calculo, _ = _datos()
+        vinculados = [{**i, "unidad_base": costeo.unidad_base(i["presentacion_unidad"]),
+                       "precio_unitario": calculo["ingredientes"][iid],
+                       "usos": len(_usos_ingrediente(iid, recetas, items))}
+                      for iid, i in ingredientes.items() if i.get("fuente_id")]
+        solo = request.args.get("solo", type=int)
+        if solo:
+            vinculados = [v for v in vinculados if v["id"] == solo]
+        sin_vincular = sum(1 for i in ingredientes.values() if not i.get("fuente_id"))
+        return render_template("super_actualizar.html", vinculados=vinculados, sin_vincular=sin_vincular,
+                               pausa=fuentes.PAUSA_ENTRE_CONSULTAS)
+
+    @app.post("/ingredientes/<int:iid>/super/consultar")
+    def super_consultar(iid):
+        """Consulta el precio actual de un ingrediente vinculado. Guarda la recomendación, no el precio."""
+        ing = db.consultar_uno("SELECT * FROM ingredientes WHERE id = ?", (iid,))
+        if not ing or not ing.get("fuente_id"):
+            return jsonify({"ok": False, "mensaje": "No está vinculado a un súper"}), 404
+        fuente = fuentes.fuente(ing["fuente"])
+        try:
+            p = fuente.consultar(ing["fuente_id"], ing["fuente_nombre"])
+        except fuentes.ErrorDeFuente as e:
+            return jsonify({"ok": False, "mensaje": str(e)}), 502
+        if not p:
+            return jsonify({"ok": True, "encontrado": False,
+                            "mensaje": f"No aparece en {fuente.nombre} (¿lo sacaron o cambió el nombre?)"})
+        db.ejecutar("UPDATE ingredientes SET fuente_precio=?, fuente_oferta=?, fuente_url=?, fuente_fecha=? WHERE id=?",
+                    (p.precio, p.precio_oferta, p.url, date.today().isoformat(), iid))
+        actual_unit = costeo.precio_por_unidad_base(ing)
+        compara = (p.precio_unitario and actual_unit and p.unidad_base == costeo.unidad_base(ing["presentacion_unidad"]))
+        return jsonify({"ok": True, "encontrado": True, "producto": p.dict(),
+                        "variacion": (p.precio_unitario / actual_unit - 1) if compara else None})
+
+    @app.post("/ingredientes/super/aplicar")
+    def super_aplicar():
+        """Guarda los precios que el usuario confirmó (y ajustó) en la pantalla de consulta."""
+        ingredientes, recetas, items, _, _ = _datos()
+        datos = request.get_json(silent=True) or {}
+        errores, cambios = [], []
+        for it in datos.get("items", []):
+            iid = it.get("id")
+            ing = ingredientes.get(iid)
+            if not ing:
+                continue
+            try:
+                precio = parse_num(it.get("precio"))
+                cant = parse_num(it.get("presentacion")) if it.get("presentacion") not in (None, "") else ing["presentacion_cantidad"]
+            except ValueError as e:
+                errores.append({"id": iid, "mensaje": str(e)})
+                continue
+            unidad = it.get("unidad") or ing["presentacion_unidad"]
+            if unidad not in costeo.UNIDADES_PRESENTACION or not precio or precio <= 0 or not cant or cant <= 0:
+                errores.append({"id": iid, "mensaje": f"«{ing['nombre']}»: precio o presentación inválidos"})
+                continue
+            if costeo.unidad_base(unidad) != costeo.unidad_base(ing["presentacion_unidad"]) and \
+                    _usos_ingrediente(iid, recetas, items):
+                errores.append({"id": iid, "mensaje": f"«{ing['nombre']}»: el producto se vende en otra unidad "
+                                                      f"({unidad}) y el ingrediente ya se usa en recetas"})
+                continue
+            cambios.append((iid, cant, unidad, precio, ing))
+        if errores:
+            return jsonify({"ok": False, "errores": errores}), 400
+        hoy = date.today().isoformat()
+        with db.lote():
+            for iid, cant, unidad, precio, ing in cambios:
+                db.ejecutar("UPDATE ingredientes SET presentacion_cantidad=?, presentacion_unidad=?, precio=?, "
+                            "fecha_precio=? WHERE id=?", (cant, unidad, precio, hoy, iid))
+                origen = "supermas" if precio in (ing.get("fuente_precio"), ing.get("fuente_oferta")) else "manual"
+                _registrar_precio(iid, cant, unidad, precio, origen)
+        flash(f"Precios actualizados: {len(cambios)} ingrediente(s)", "ok")
+        return jsonify({"ok": True, "actualizados": len(cambios)})
+
+    @app.post("/super/probar")
+    def super_probar():
+        fuente = fuentes.fuente("supermas")
+        try:
+            productos, total = fuente.buscar("harina", paginas=1)
+        except fuentes.ErrorDeFuente as e:
+            flash(str(e), "error")
+            return redirect(url_for("configuracion"))
+        if not productos:
+            flash(f"{fuente.nombre} respondió pero no se pudo leer ningún producto: puede que haya cambiado su página.",
+                  "error")
+        else:
+            ej = productos[0]
+            flash(f"Conexión con {fuente.nombre} OK: {total} resultados para «harina». "
+                  f"Ejemplo: {ej.nombre} a {gs(ej.precio)} Gs", "ok")
+        return redirect(url_for("configuracion"))
 
     # ---------- Excel: importar y exportar
     def _carpeta_importaciones():

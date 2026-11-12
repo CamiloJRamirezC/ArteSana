@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block titulo %}Precios del súper{% endblock %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('ingredientes') }}">← Ingredientes</a></p>
+<div class="encabezado">
+  <h1>Precios de Supermás</h1>
+  <div class="acciones">
+    <span class="nota" id="estado"></span>
+    <button class="boton secundario" id="consultar" {{ 'disabled' if not vinculados }}>Consultar de nuevo</button>
+    <button class="boton" id="guardar" disabled>Guardar los marcados</button>
+  </div>
+</div>
+
+<section class="tarjeta">
+  {% if not vinculados %}
+    <p>Todavía no tenés ingredientes vinculados a Supermás. Abrí un ingrediente y tocá <strong>Buscar en Supermás</strong>,
+      o creá uno nuevo con <strong>Buscar precio en Supermás</strong>.</p>
+  {% else %}
+  <p class="ayuda" style="margin:0 0 .75rem">Consulto el precio actual de cada ingrediente vinculado, uno por uno y con una pausa corta.
+    Los que cambiaron quedan <strong>marcados</strong>. El precio a guardar es el normal; podés tocar <em>oferta</em> o escribir otro.
+    <strong>No se guarda nada hasta que toques «Guardar los marcados».</strong></p>
+  <div class="progreso"><div id="barra"></div></div>
+  <div class="tabla-scroll">
+  <table class="grilla" id="tabla">
+    <thead><tr><th></th><th>Ingrediente</th><th class="num">Tu precio</th><th>En Supermás</th><th class="num">Súper</th>
+      <th class="num">Cambio</th><th class="num">Precio a guardar</th></tr></thead>
+    <tbody>
+    {% for v in vinculados %}
+      <tr data-id="{{ v.id }}" data-cant="{{ v.presentacion_cantidad }}" data-unidad="{{ v.presentacion_unidad }}" data-precio="{{ v.precio }}">
+        <td><input type="checkbox" class="c-usar" disabled aria-label="Usar el precio del súper para {{ v.nombre }}"></td>
+        <td><a href="{{ url_for('ingrediente_editar', iid=v.id) }}"><strong>{{ v.nombre }}</strong></a>
+          {% if v.usos %}<br><small class="nota">en {{ v.usos }} receta(s)</small>{% endif %}</td>
+        <td class="num">{{ v.precio|gs }}<br><small class="nota">{{ v.presentacion_cantidad|cant }} {{ v.presentacion_unidad }} · {{ v.precio_unitario|gs_unit }}/{{ v.unidad_base }}</small></td>
+        <td class="c-producto"><small>{{ v.fuente_nombre }}</small>
+          {% if v.fuente_url %}<br><a class="nota" href="{{ v.fuente_url }}" target="_blank" rel="noopener">ver ↗</a>{% endif %}</td>
+        <td class="num c-super"><span class="nota">esperando…</span></td>
+        <td class="num c-cambio"></td>
+        <td class="num"><input class="c-precio" inputmode="decimal" disabled>
+          <br><button type="button" class="enlace c-oferta" hidden></button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% if sin_vincular %}<p class="nota">{{ sin_vincular }} ingrediente(s) sin vincular: se buscan desde su ficha.</p>{% endif %}
+</section>
+
+<script src="{{ url_for('static', filename='grilla.js') }}"></script>
+<script>
+(() => {
+  const csrf = {{ csrf_token()|tojson }};
+  const pausa = {{ (pausa * 1000)|int }};
+  const filas = [...document.querySelectorAll("#tabla tbody tr")];
+  if (!filas.length) return;
+  const estado = document.getElementById("estado");
+  const barra = document.getElementById("barra");
+  const botonGuardar = document.getElementById("guardar");
+  const botonConsultar = document.getElementById("consultar");
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  let datos = {};
+
+  function contar() {
+    const n = filas.filter((tr) => tr.querySelector(".c-usar").checked).length;
+    botonGuardar.disabled = n === 0;
+    botonGuardar.textContent = n ? `Guardar los marcados (${n})` : "Guardar los marcados";
+  }
+
+  async function consultarTodo() {
+    botonConsultar.disabled = true;
+    botonGuardar.disabled = true;
+    let hechos = 0, cambiaron = 0, problemas = 0;
+    for (const tr of filas) {
+      const id = tr.dataset.id;
+      tr.querySelector(".c-super").innerHTML = '<span class="nota">consultando…</span>';
+      let r;
+      try {
+        const resp = await fetch(`/ingredientes/${id}/super/consultar`, { method: "POST", headers: { "X-CSRF-Token": csrf } });
+        r = await resp.json();
+      } catch (e) { r = { ok: false, mensaje: "Sin respuesta de la app" }; }
+      hechos += 1;
+      barra.style.width = (hechos / filas.length * 100) + "%";
+      estado.textContent = `Consultado ${hechos} de ${filas.length}`;
+      const celda = tr.querySelector(".c-super"), cambio = tr.querySelector(".c-cambio");
+      const usar = tr.querySelector(".c-usar"), precio = tr.querySelector(".c-precio"), oferta = tr.querySelector(".c-oferta");
+      if (!r.ok) {
+        celda.innerHTML = `<span class="alerta">${r.mensaje || "Error"}</span>`;
+        problemas += 1;
+        if (r.mensaje && r.mensaje.includes("conectar")) { estado.textContent = r.mensaje; break; }
+      } else if (!r.encontrado) {
+        celda.innerHTML = `<span class="alerta">${r.mensaje}</span>`;
+        problemas += 1;
+      } else {
+        const p = r.producto;
+        datos[id] = p;
+        celda.innerHTML = `<strong>${Grilla.formato(p.precio)}</strong>` +
+          (p.presentacion ? `<br><small class="nota">${Grilla.formato(p.presentacion, 3)} ${p.unidad}` +
+            (p.precio_unitario ? ` · ${Grilla.formato(p.precio_unitario, 2)}/${p.unidad_base}` : "") + `</small>`
+            : `<br><small class="alerta">presentación no detectada</small>`) +
+          (p.precio_oferta ? `<br><span class="etiqueta etiqueta-oferta">oferta ${Grilla.formato(p.precio_oferta)}</span>` : "");
+        if (r.variacion !== null && r.variacion !== undefined) {
+          const pct = r.variacion * 100;
+          cambio.innerHTML = Math.abs(pct) < 0.5 ? '<span class="nota">igual</span>'
+            : `<span class="${pct > 0 ? "sube" : "baja"}">${pct > 0 ? "▲" : "▼"} ${Grilla.formato(Math.abs(pct), 1)} %</span>`;
+        } else {
+          cambio.innerHTML = '<span class="nota" title="Otra unidad o sin presentación: compará a mano">—</span>';
+        }
+        precio.disabled = false;
+        precio.value = Grilla.formato(p.precio);
+        usar.disabled = false;
+        const mismaPresentacion = p.presentacion && Number(tr.dataset.cant) === p.presentacion && tr.dataset.unidad === p.unidad;
+        const usaOfertaVigente = p.precio_oferta && mismaPresentacion && Math.abs(Number(tr.dataset.precio) - p.precio_oferta) < 1;
+        usar.checked = !usaOfertaVigente && r.variacion !== null && Math.abs(r.variacion) >= 0.005;
+        if (usaOfertaVigente) {
+          precio.value = Grilla.formato(p.precio_oferta);
+          cambio.innerHTML = '<span class="nota" title="Tu precio es la oferta de hoy">usás la oferta</span>';
+        }
+        if (usar.checked) cambiaron += 1;
+        if (p.precio_oferta) {
+          oferta.hidden = false;
+          oferta.textContent = `usar oferta (${Grilla.formato(p.precio_oferta)})`;
+          oferta.onclick = () => { precio.value = Grilla.formato(p.precio_oferta); usar.checked = true; contar(); };
+        }
+      }
+      contar();
+      if (hechos < filas.length) await espera(pausa);
+    }
+    estado.textContent = `Listo: ${cambiaron} con cambios` + (problemas ? `, ${problemas} con problemas` : "");
+    botonConsultar.disabled = false;
+    contar();
+  }
+
+  document.getElementById("tabla").addEventListener("change", contar);
+  document.getElementById("tabla").addEventListener("input", (e) => {
+    if (e.target.matches(".c-precio")) { e.target.closest("tr").querySelector(".c-usar").checked = true; contar(); }
+  });
+  botonConsultar.addEventListener("click", consultarTodo);
+  botonGuardar.addEventListener("click", async () => {
+    const items = filas.filter((tr) => tr.querySelector(".c-usar").checked).map((tr) => {
+      const p = datos[tr.dataset.id] || {};
+      return { id: Number(tr.dataset.id), precio: tr.querySelector(".c-precio").value,
+               presentacion: p.presentacion ?? tr.dataset.cant, unidad: p.unidad || tr.dataset.unidad };
+    });
+    botonGuardar.disabled = true;
+    estado.textContent = "Guardando…";
+    const r = await Grilla.guardar("{{ url_for('super_aplicar') }}", { items }, csrf);
+    if (r.ok) { location.href = "{{ url_for('ingredientes') }}"; return; }
+    estado.textContent = "No se guardó nada: " + (r.errores || []).map((e) => e.mensaje).join(" · ");
+    contar();
+  });
+  consultarTodo();
+})();
+</script>
+{% endblock %}

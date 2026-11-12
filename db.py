@@ -174,6 +174,41 @@ def crear_tablas():
             cur.execute(sentencia)
     cur.close()
     conn.commit()
+    migrar()
+
+
+# Columnas agregadas después de la primera versión: se crean solas, sin tocar los datos
+COLUMNAS_NUEVAS = {
+    "ingredientes": [
+        ("fuente", "TEXT"),             # súper vinculado, ej. 'supermas'
+        ("fuente_id", "TEXT"),          # código del producto en el súper
+        ("fuente_nombre", "TEXT"),      # nombre del producto en el súper
+        ("fuente_url", "TEXT"),
+        ("fuente_precio", "DOUBLE PRECISION"),   # último precio recomendado (normal)
+        ("fuente_oferta", "DOUBLE PRECISION"),   # oferta vigente en esa consulta, si había
+        ("fuente_fecha", "TEXT"),
+    ],
+}
+
+
+def _columnas(tabla):
+    if g.get("db_tipo") == "postgres":
+        filas = consultar("SELECT column_name AS nombre FROM information_schema.columns WHERE table_name = ?", (tabla,))
+    else:
+        filas = consultar(f"SELECT name AS nombre FROM pragma_table_info('{tabla}')")
+    return {f["nombre"] for f in filas}
+
+
+def migrar():
+    conn = conexion()
+    for tabla, columnas in COLUMNAS_NUEVAS.items():
+        existentes = _columnas(tabla)
+        for nombre, tipo in columnas:
+            if nombre not in existentes:
+                cur = conn.cursor()
+                cur.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}")
+                cur.close()
+    conn.commit()
 
 
 def obtener_config(clave, default=None):

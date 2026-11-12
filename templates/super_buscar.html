@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block titulo %}Buscar en {{ fuente.nombre }}{% endblock %}
+{% block contenido %}
+<p class="migas">
+  {% if ing %}<a href="{{ url_for('ingrediente_editar', iid=ing.id) }}">← {{ ing.nombre }}</a>
+  {% else %}<a href="{{ url_for('ingrediente_nuevo') }}">← Nuevo ingrediente</a>{% endif %}
+</p>
+<section class="tarjeta">
+  <h1>Buscar en {{ fuente.nombre }}{% if ing %} para «{{ ing.nombre }}»{% endif %}</h1>
+  <form method="get" class="buscar-super">
+    {% if ing %}<input type="hidden" name="iid" value="{{ ing.id }}">{% endif %}
+    {% if nombre_nuevo %}<input type="hidden" name="nombre" value="{{ nombre_nuevo }}">{% endif %}
+    <input type="search" name="q" value="{{ q }}" placeholder="ej. harina 000, manteca, leche entera" autofocus required minlength="2">
+    <button class="boton">Buscar</button>
+  </form>
+  <p class="ayuda" style="margin-top:.5rem">Elegí el producto que comprás. Te precargo la presentación y el precio <strong>recomendado</strong>:
+    después lo revisás y recién se guarda cuando confirmás.</p>
+
+  {% if error %}<div class="aviso aviso-error">{{ error }}</div>{% endif %}
+
+  {% if q and not error %}
+    {% if productos %}
+    <p class="nota">{{ total }} resultado(s){% if total > productos|length %}; se muestran los primeros {{ productos|length }}: buscá más preciso si no está el que querés{% endif %}.
+      {% if ing and precio_unitario_ing %}Tu precio actual: <strong>{{ precio_unitario_ing|gs_unit }} Gs/{{ base_ing }}</strong>.{% endif %}</p>
+    <div class="tabla-scroll">
+    <table>
+      <thead><tr><th>Producto</th><th class="num">Presentación</th><th class="num">Precio</th>
+        <th class="num">Por g / ml / u</th><th></th></tr></thead>
+      <tbody>
+      {% for p in productos %}
+        {% set otra_unidad = base_ing and p.unidad_base and p.unidad_base != base_ing %}
+        <tr class="{{ 'atenuado' if otra_unidad }}">
+          <td><strong>{{ p.nombre }}</strong>
+            {% if p.id == mas_barato %}<span class="etiqueta etiqueta-ok">más barato por {{ p.unidad_base }}</span>{% endif %}
+            {% if p.etiqueta and p.etiqueta != 'Oferta' %}<br><small class="nota">{{ p.etiqueta }}</small>{% endif %}
+            <br><a class="nota" href="{{ p.url }}" target="_blank" rel="noopener">ver en {{ fuente.nombre }} ↗</a></td>
+          <td class="num">{% if p.presentacion %}{{ p.presentacion|cant }} {{ p.unidad }}{% if p.por_kilo %}<br><small class="nota">por kilo</small>{% endif %}
+              {% else %}<span class="alerta" title="No figura en el nombre: la completás vos">?</span>{% endif %}</td>
+          <td class="num"><strong>{{ p.precio|gs }}</strong>
+            {% if p.precio_oferta %}<br><span class="etiqueta etiqueta-oferta">oferta {{ p.precio_oferta|gs }}</span>{% endif %}</td>
+          <td class="num">{% if p.precio_unitario %}{{ p.precio_unitario|gs_unit }} / {{ p.unidad_base }}{% endif %}</td>
+          <td>
+            {% set params = {'sup_fuente': p.fuente, 'sup_id': p.id, 'sup_nombre': p.nombre, 'sup_url': p.url,
+                             'sup_precio': p.precio, 'sup_oferta': p.precio_oferta or '', 'sup_cant': p.presentacion or '',
+                             'sup_unidad': p.unidad or ''} %}
+            {% if ing %}
+              <a class="boton {{ 'secundario' if otra_unidad }}" href="{{ url_for('ingrediente_editar', iid=ing.id, **params) }}"
+                 {% if otra_unidad %}title="Se vende en {{ p.unidad }} y tu ingrediente está en {{ base_ing }}"{% endif %}>Elegir</a>
+            {% else %}
+              <a class="boton" href="{{ url_for('ingrediente_nuevo', nombre=nombre_nuevo or q|capitalize, **params) }}">Elegir</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p>No encontré nada para «{{ q }}» en {{ fuente.nombre }}. Probá con menos palabras (ej. «manteca» en vez de «manteca sin sal 200 g»).</p>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

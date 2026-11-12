@@ -6,6 +6,7 @@
   <div class="acciones">
     <a class="boton" href="{{ url_for('ingrediente_nuevo') }}">+ Ingrediente</a>
     <a class="boton secundario" href="{{ url_for('ingredientes_grilla') }}">✎ Editar en grilla</a>
+    <a class="boton secundario" href="{{ url_for('super_actualizar') }}">🛒 Precios de Supermás</a>
     <a class="boton secundario" href="{{ url_for('importar') }}">⇪ Importar Excel</a>
     <a class="boton secundario" href="{{ url_for('exportar_excel') }}">⤓ Descargar Excel</a>
   </div>
@@ -17,7 +18,7 @@
   <div class="tabla-scroll">
   <table id="tabla-ingredientes">
     <thead><tr><th>Ingrediente</th><th class="num">Presentación</th><th class="num">Precio</th>
-      <th class="num">Precio por unidad base</th><th>Actualizado</th><th class="num">Recetas</th></tr></thead>
+      <th class="num">Precio por unidad base</th><th>Actualizado</th><th class="num">Súper</th><th class="num">Recetas</th></tr></thead>
     <tbody>
     {% for i in filas %}
       <tr>
@@ -26,6 +27,11 @@
         <td class="num">{{ i.precio|gs }}</td>
         <td class="num">{% if i.precio_unitario %}{{ i.precio_unitario|gs_unit }} / {{ i.unidad_base }}{% else %}<span class="alerta">sin precio</span>{% endif %}</td>
         <td>{{ i.fecha_precio or '' }}</td>
+        <td class="num">{% if i.fuente_id %}
+            {% if i.fuente_precio %}<span title="{{ i.fuente_nombre }} · consultado {{ i.fuente_fecha }}">{{ i.fuente_precio|gs }}</span>
+              {% if i.fuente_precio != i.precio %}<span class="{{ 'sube' if i.fuente_precio > i.precio else 'baja' }}">{{ '▲' if i.fuente_precio > i.precio else '▼' }}</span>{% endif %}
+            {% else %}<span class="nota">vinculado</span>{% endif %}
+          {% else %}<a class="nota" href="{{ url_for('super_buscar', q=i.nombre, iid=i.id) }}">buscar</a>{% endif %}</td>
         <td class="num">{{ i.usos }}</td>
       </tr>
     {% endfor %}

@@ -5,8 +5,22 @@
 <p class="migas"><a href="{{ url_for('ingredientes') }}">← Ingredientes</a></p>
 <section class="tarjeta angosta">
   <h1>{{ 'Editar ingrediente' if ing else 'Nuevo ingrediente' }}</h1>
+  {% if sugerencia %}
+  <div class="sugerencia">
+    <strong>Precio recomendado por {{ sugerencia.fuente_nombre }}</strong> para <em>{{ sugerencia.nombre }}</em>:
+    <strong>{{ sugerencia.precio|gs }} Gs</strong>{% if sugerencia.cant %} por {{ sugerencia.cant|cant }} {{ sugerencia.unidad }}{% endif %}.
+    {% if sugerencia.oferta %}<br>Hoy está en <strong>oferta a {{ sugerencia.oferta|gs }} Gs</strong>
+      <button type="button" class="enlace" id="usar-oferta" data-precio="{{ sugerencia.oferta|gs }}">usar la oferta</button>
+      · <button type="button" class="enlace" id="usar-normal" data-precio="{{ sugerencia.precio|gs }}">usar el normal</button>{% endif %}
+    {% if not sugerencia.cant %}<br><span class="alerta">No figura la presentación en el nombre: completala vos.</span>{% endif %}
+    {% if ing %}<br><small>Antes: {{ ing.precio|gs }} Gs por {{ ing.presentacion_cantidad|cant }} {{ ing.presentacion_unidad }}.</small>{% endif %}
+    <br><small>Ya quedó cargado abajo. <strong>Revisalo y tocá Guardar</strong>; hasta entonces no cambia nada.</small>
+  </div>
+  {% endif %}
   <form method="post">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% if sugerencia %}{% for c in ['fuente', 'id', 'nombre', 'url', 'precio', 'oferta', 'cant', 'unidad'] %}
+    <input type="hidden" name="sup_{{ c }}" value="{{ sugerencia[c] if sugerencia[c] is not none else '' }}">{% endfor %}{% endif %}
     <label>Nombre
       <input name="nombre" required value="{{ f.get('nombre', '') }}" placeholder="ej. Harina 000" {{ 'autofocus' if not ing }}>
     </label>
@@ -35,9 +49,48 @@
     <div class="acciones">
       <button class="boton">Guardar</button>
       {% if not ing %}<button class="boton secundario" name="otro" value="1">Guardar y cargar otro</button>{% endif %}
+      {% if not ing and not sugerencia %}<button type="button" class="boton secundario" id="buscar-super">🔎 Buscar precio en Supermás</button>{% endif %}
     </div>
   </form>
 </section>
+
+{% if ing and not sugerencia %}
+<section class="tarjeta angosta">
+  <h2>Precio en el súper</h2>
+  {% if ing.fuente_id %}
+    <p>Vinculado a <strong>{{ ing.fuente_nombre }}</strong> en Supermás
+      {% if ing.fuente_url %}(<a href="{{ ing.fuente_url }}" target="_blank" rel="noopener">ver ↗</a>){% endif %}.</p>
+    {% if ing.fuente_precio %}
+    <p>Último precio consultado: <strong>{{ ing.fuente_precio|gs }} Gs</strong>
+      {% if ing.fuente_oferta %}(oferta {{ ing.fuente_oferta|gs }}){% endif %} el {{ ing.fuente_fecha }}.
+      Tu precio: <strong>{{ ing.precio|gs }} Gs</strong> por {{ ing.presentacion_cantidad|cant }} {{ ing.presentacion_unidad }}.</p>
+    {% endif %}
+    <div class="acciones">
+      <a class="boton" href="{{ url_for('super_actualizar', solo=ing.id) }}">Consultar precio actual</a>
+      <a class="boton secundario" href="{{ url_for('super_buscar', q=ing.nombre, iid=ing.id) }}">Elegir otro producto</a>
+      <form method="post" action="{{ url_for('ingrediente_desvincular', iid=ing.id) }}" class="en-linea">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <button class="boton secundario">Desvincular</button>
+      </form>
+    </div>
+  {% else %}
+    <p class="nota">Buscalo en Supermás para tener el precio recomendado y poder actualizarlo con un clic más adelante.</p>
+    <a class="boton" href="{{ url_for('super_buscar', q=ing.nombre, iid=ing.id) }}">🔎 Buscar en Supermás</a>
+  {% endif %}
+</section>
+{% endif %}
+<script>
+  for (const id of ["usar-oferta", "usar-normal"]) {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener("click", () => { document.querySelector("input[name=precio]").value = b.dataset.precio; });
+  }
+  const buscar = document.getElementById("buscar-super");
+  if (buscar) buscar.addEventListener("click", () => {
+    const nombre = document.querySelector("input[name=nombre]").value.trim();
+    if (nombre.length < 2) { alert("Escribí primero el nombre del ingrediente"); return; }
+    location.href = {{ url_for('super_buscar')|tojson }} + "?q=" + encodeURIComponent(nombre) + "&nombre=" + encodeURIComponent(nombre);
+  });
+</script>
 
 {% if ing %}
   {% if usos %}<p class="nota">Se usa en: {{ usos|join(', ') }}</p>{% endif %}

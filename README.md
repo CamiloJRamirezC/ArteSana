@@ -40,6 +40,25 @@ se actualizan y los nuevos se agregan. Acepta unidades escritas como `gr`, `kilo
   filas tiene un error, esa receta no se toca.
 - Acepta también la planilla `planilla/ArteSana_Lista_de_Materiales.xlsx` del principio.
 
+## Precios de Supermás (recomendados)
+
+El precio de cada ingrediente **lo decidís vos**. La app te recomienda el de [Supermás](https://www.supermas.com.py/):
+
+1. En la ficha de un ingrediente: **🔎 Buscar en Supermás** (en uno nuevo: **Buscar precio en Supermás**).
+2. Ves los productos con su presentación, precio normal, **oferta** si hay, y precio por g/ml/u para comparar marcas.
+   El más barato por gramo queda marcado.
+3. Tocás **Elegir**: se precargan la presentación y el precio recomendado (el normal; con un clic usás la oferta).
+   **No se guarda nada hasta que tocás Guardar.** El ingrediente queda vinculado a ese producto.
+4. Más adelante, **Ingredientes → 🛒 Precios de Supermás** consulta todos los vinculados (uno por uno, con una pausa
+   para no cargar el sitio), te muestra tu precio contra el del súper y cuánto cambió, y marca los que cambiaron.
+   Ajustás lo que quieras y guardás solo los marcados. Si tu precio es la oferta vigente, no se marca.
+
+En el historial de precios queda el origen: `supermas` si guardaste el precio recomendado, `manual` si escribiste otro.
+Para probar que la conexión funciona: **Configuración → Probar conexión con Supermás**.
+
+> Si Supermás cambia su página web, la búsqueda puede dejar de funcionar hasta que se actualice la app.
+> Tus precios no se tocan. La app está preparada para sumar otros supermercados (`fuentes.py`).
+
 Cada vez que cambiás el precio de un ingrediente queda guardado en su **historial de precios**.
 Ese historial es la base para el paso siguiente: leer los precios del supermercado automáticamente.
 
@@ -202,6 +221,7 @@ artesana.env.ejemplo   configuración local por defecto
 app.py                 rutas y pantallas
 costeo.py              cálculo de costos (sin dependencias, fácil de probar)
 importexport.py        importar y exportar Excel (con vista previa)
+fuentes.py             precios de supermercados (Supermás): búsqueda, oferta y presentación
 db.py                  base de datos: SQLite local / PostgreSQL en internet
 utils.py               lectura y formato de números (1.500 · 2,5)
 templates/             pantallas HTML

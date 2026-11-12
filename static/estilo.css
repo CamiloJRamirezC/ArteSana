@@ -140,3 +140,16 @@ kbd { font: .8em/1 ui-monospace, monospace; border: 1px solid #d8cabb; border-bo
   .grilla .nro { display: none; }
   .grilla th:first-child { display: none; }
 }
+
+/* ---------- supermercado */
+.sugerencia { background: #eef6ee; border: 1px solid #cfe5cf; border-radius: 8px; padding: .75rem .9rem; margin-bottom: 1rem; line-height: 1.6; }
+.etiqueta-ok { background: #e1f1e3; color: var(--ok); }
+.etiqueta-oferta { background: #fde7d6; color: #b4510f; }
+tr.atenuado td { opacity: .55; }
+.buscar-super { display: flex; gap: .6rem; max-width: 560px; }
+.buscar-super input { margin: 0; }
+.progreso { height: 6px; background: #efe4d8; border-radius: 3px; overflow: hidden; margin-bottom: .75rem; }
+.progreso #barra { height: 100%; width: 0; background: var(--canela); transition: width .3s; }
+.sube { color: var(--error); font-weight: 600; font-size: .85rem; }
+.baja { color: var(--ok); font-weight: 600; font-size: .85rem; }
+.grilla .c-precio { width: 7rem; text-align: right; }

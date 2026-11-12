@@ -13,6 +13,19 @@
   </form>
 </section>
 
+<section class="tarjeta angosta">
+  <h2>Supermercados</h2>
+  <p>Los precios de <strong>Supermás</strong> se usan como <strong>recomendación</strong>: buscás el producto desde la ficha de cada
+    ingrediente y el precio se guarda solo cuando lo confirmás. Para consultar todos los vinculados:
+    <a href="{{ url_for('super_actualizar') }}">Precios de Supermás</a>.</p>
+  <form method="post" action="{{ url_for('super_probar') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="boton secundario">Probar conexión con Supermás</button>
+  </form>
+  <p class="nota">Si Supermás cambia su página web, la búsqueda puede dejar de funcionar hasta que se actualice la app; los precios
+    que ya cargaste no se tocan.</p>
+</section>
+
 <section class="tarjeta angosta" id="instalar-app">
   <h2>Instalar como aplicación</h2>
   <p>Podés instalar ArteSana para abrirla como un programa más, con su ícono, sin barra del navegador.</p>
