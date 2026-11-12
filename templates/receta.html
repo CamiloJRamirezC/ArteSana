@@ -33,71 +33,31 @@
 </section>
 
 <section class="tarjeta" id="lineas">
-  <h2>Ingredientes de una tanda</h2>
-  {% if res.lineas %}
+  <div class="encabezado" style="margin-bottom:.5rem">
+    <h2 style="margin:0">Ingredientes de una tanda</h2>
+    <div class="acciones">
+      <span class="nota" id="estado-grilla"></span>
+      <button class="boton secundario" id="descartar" hidden>Descartar cambios</button>
+      <button class="boton" id="guardar" disabled>Guardar</button>
+    </div>
+  </div>
+  <p class="ayuda" style="margin:0 0 .75rem">Escribí y elegí el ingrediente, la cantidad, y <kbd>Enter</kbd> para pasar a la siguiente fila.
+    Podés <strong>pegar desde Excel</strong> dos columnas: ingrediente y cantidad. Las cantidades van en
+    <strong>g, ml o u</strong>, según el ingrediente.</p>
   <div class="tabla-scroll">
-  <table>
-    <thead><tr><th>Ingrediente</th><th class="num">Cantidad</th><th class="num solo-ancho">Precio por unidad</th>
-      <th class="num">Costo</th><th class="num solo-ancho">% del total</th><th></th></tr></thead>
-    <tbody>
-    {% for ln in res.lineas %}
-      <tr>
-        <td>{% if ln.origen == 'subreceta' %}<a href="{{ url_for('receta', rid=ln.subreceta_id) }}">{{ ln.nombre }}</a> <span class="etiqueta">subreceta</span>
-            {% else %}<a href="{{ url_for('ingrediente_editar', iid=ln.ingrediente_id) }}">{{ ln.nombre }}</a>{% endif %}</td>
-        <td class="num">
-          <form method="post" action="{{ url_for('linea_editar', rid=receta.id, lid=ln.item_id) }}" class="cantidad-form">
-            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-            <input name="cantidad" value="{{ ln.cantidad|cant }}" inputmode="decimal" aria-label="Cantidad de {{ ln.nombre }}">
-            <span class="unidad">{{ ln.unidad }}</span>
-            <button class="mini" title="Guardar cantidad">✓</button>
-          </form>
-        </td>
-        <td class="num solo-ancho">{{ ln.precio_unitario|gs_unit }} / {{ ln.unidad }}</td>
-        <td class="num">{{ ln.costo|gs }}</td>
-        <td class="num solo-ancho"><span class="barrita" style="--p: {{ (ln.porcentaje * 100)|round(1) }}%"></span>{{ ln.porcentaje|pct }}</td>
-        <td>
-          <form method="post" action="{{ url_for('linea_borrar', rid=receta.id, lid=ln.item_id) }}" class="en-linea"
-                onsubmit="return confirm('¿Quitar {{ ln.nombre }} de la receta?')">
-            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-            <button class="mini peligro" title="Quitar">✕</button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-    <tfoot><tr><td>Total de la tanda</td><td></td><td class="solo-ancho"></td><td class="num">{{ res.costo_tanda|gs }}</td><td class="solo-ancho"></td><td></td></tr></tfoot>
+  <table class="grilla" id="grilla">
+    <thead><tr><th class="num solo-ancho">#</th><th>Ingrediente o subreceta</th><th class="num">Cantidad</th><th>Unidad</th>
+      <th class="num solo-ancho">Precio por unidad</th><th class="num">Costo</th><th class="num solo-ancho">%</th><th></th></tr></thead>
+    <tbody></tbody>
+    <tfoot><tr><td class="solo-ancho"></td><td><button class="enlace" id="agregar-fila" type="button">+ Agregar fila</button></td>
+      <td></td><td></td><td class="solo-ancho"></td><td class="num" id="total"></td><td class="solo-ancho"></td><td></td></tr></tfoot>
   </table>
   </div>
-  {% else %}
-  <p class="nota">Todavía no tiene ingredientes. Agregá el primero abajo.</p>
-  {% endif %}
-
-  <form method="post" action="{{ url_for('linea_agregar', rid=receta.id) }}" class="agregar-linea">
-    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-    <label>Agregar
-      <select name="componente" id="componente" required>
-        <option value="">Elegí ingrediente o subreceta…</option>
-        <optgroup label="Ingredientes">
-          {% for i in ingredientes %}
-          <option value="i:{{ i.id }}" data-unidad="{{ unidad_base(i.presentacion_unidad) }}">{{ i.nombre }} ({{ unidad_base(i.presentacion_unidad) }})</option>
-          {% endfor %}
-        </optgroup>
-        {% if subrecetas_posibles %}
-        <optgroup label="Subrecetas">
-          {% for s in subrecetas_posibles %}
-          <option value="r:{{ s.id }}" data-unidad="{{ s.unidad_rinde }}">{{ s.nombre }} ({{ s.unidad_rinde }})</option>
-          {% endfor %}
-        </optgroup>
-        {% endif %}
-      </select>
-    </label>
-    <label>Cantidad
-      <span class="con-unidad"><input name="cantidad" required inputmode="decimal" placeholder="ej. 250 o 2,5"><span id="unidad-elegida" class="unidad">g/ml/u</span></span>
-    </label>
-    <button class="boton">Agregar</button>
-  </form>
-  <p class="nota">La cantidad va en la unidad del ingrediente: gramos, mililitros o unidades. Si falta un ingrediente,
-    <a href="{{ url_for('ingrediente_nuevo') }}">crealo acá</a>.</p>
+  <datalist id="componentes">
+    {% for c in componentes %}<option value="{{ c.nombre }}">{{ 'subreceta · ' if c.tipo == 'subreceta' }}{{ c.unidad }}</option>{% endfor %}
+  </datalist>
+  <p class="nota">Si falta un ingrediente, <a href="{{ url_for('ingrediente_nuevo') }}">crealo</a> o cargá varios juntos en la
+    <a href="{{ url_for('ingredientes_grilla') }}">grilla de ingredientes</a>.</p>
 </section>
 
 {% if receta.notas %}<section class="tarjeta"><h2>Notas</h2><p>{{ receta.notas }}</p></section>{% endif %}
@@ -110,12 +70,142 @@
   <button class="enlace peligro">Borrar esta receta</button>
 </form>
 
+<script src="{{ url_for('static', filename='grilla.js') }}"></script>
 <script>
-  const sel = document.getElementById('componente');
-  const etiqueta = document.getElementById('unidad-elegida');
-  sel.addEventListener('change', () => {
-    const op = sel.options[sel.selectedIndex];
-    etiqueta.textContent = op.dataset.unidad || 'g/ml/u';
+(() => {
+  const componentes = {{ componentes|tojson }};
+  const inicial = {{ lineas_grilla|tojson }};
+  const rinde = {{ receta.rinde|tojson }};
+  const urlGuardar = {{ url_for('receta_grilla', rid=receta.id)|tojson }};
+  const csrf = {{ csrf_token()|tojson }};
+  const porNombre = new Map(componentes.map((c) => [Grilla.normalizar(c.nombre), c]));
+  const tabla = document.getElementById("grilla");
+  const cuerpo = tabla.tBodies[0];
+  const botonGuardar = document.getElementById("guardar");
+  const botonDescartar = document.getElementById("descartar");
+  const estado = document.getElementById("estado-grilla");
+  let sucio = false;
+
+  const fmtCant = (n) => (n === null || n === undefined) ? "" : Grilla.formato(n, 3);
+
+  function fila(nombre = "", cantidad = "") {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="num nro solo-ancho"></td>
+      <td><input data-col="0" class="c-nombre" list="componentes" autocomplete="off" placeholder="Escribí para buscar…"></td>
+      <td class="num"><input data-col="1" class="c-cant" inputmode="decimal" placeholder="0"></td>
+      <td class="c-unidad"></td>
+      <td class="num solo-ancho c-precio"></td>
+      <td class="num c-costo"></td>
+      <td class="num solo-ancho c-pct"></td>
+      <td><button type="button" class="mini peligro c-quitar" title="Quitar fila" tabindex="-1">✕</button></td>`;
+    tr.querySelector(".c-nombre").value = nombre;
+    tr.querySelector(".c-cant").value = typeof cantidad === "number" ? fmtCant(cantidad) : cantidad;
+    cuerpo.appendChild(tr);
+    return tr;
+  }
+
+  function recalcular() {
+    let total = 0;
+    const costos = [];
+    [...cuerpo.rows].forEach((tr, i) => {
+      tr.querySelector(".nro").textContent = i + 1;
+      const nombre = tr.querySelector(".c-nombre");
+      const cant = tr.querySelector(".c-cant");
+      const comp = porNombre.get(Grilla.normalizar(nombre.value));
+      const n = Grilla.num(cant.value);
+      nombre.classList.toggle("invalido", !!nombre.value.trim() && !comp);
+      nombre.title = nombre.value.trim() && !comp ? "No existe: cargalo en Ingredientes" : "";
+      cant.classList.toggle("invalido", cant.value.trim() !== "" && (Number.isNaN(n) || n <= 0));
+      tr.querySelector(".c-unidad").textContent = comp ? comp.unidad + (comp.tipo === "subreceta" ? " · subreceta" : "") : "";
+      tr.querySelector(".c-precio").textContent = comp ? Grilla.formato(comp.precio, 2) + " / " + comp.unidad : "";
+      const costo = comp && n > 0 ? n * comp.precio : null;
+      tr.querySelector(".c-costo").textContent = costo === null ? "" : Grilla.formato(costo);
+      costos.push(costo);
+      if (costo) total += costo;
+    });
+    [...cuerpo.rows].forEach((tr, i) => {
+      tr.querySelector(".c-pct").textContent = costos[i] && total ? Grilla.formato(costos[i] / total * 100, 1) + " %" : "";
+    });
+    document.getElementById("total").innerHTML = `<strong>${Grilla.formato(total)}</strong>` +
+      (rinde > 0 ? `<br><small class="nota">${Grilla.formato(total / rinde)} por {{ receta.unidad_rinde }}</small>` : "");
+  }
+
+  function asegurarFilaVacia() {
+    const ultima = cuerpo.rows[cuerpo.rows.length - 1];
+    if (!ultima || ultima.querySelector(".c-nombre").value.trim() || ultima.querySelector(".c-cant").value.trim()) fila();
+  }
+
+  function marcarSucio() {
+    sucio = true;
+    botonGuardar.disabled = false;
+    botonDescartar.hidden = false;
+    estado.textContent = "Cambios sin guardar";
+  }
+
+  function cargar(lineas) {
+    cuerpo.innerHTML = "";
+    lineas.forEach((l) => fila(l.nombre, l.cantidad));
+    asegurarFilaVacia();
+    recalcular();
+  }
+
+  cuerpo.addEventListener("input", (e) => {
+    e.target.classList.remove("error-servidor");
+    marcarSucio(); asegurarFilaVacia(); recalcular();
   });
+  cuerpo.addEventListener("click", (e) => {
+    if (!e.target.matches(".c-quitar")) return;
+    e.target.closest("tr").remove();
+    marcarSucio(); asegurarFilaVacia(); recalcular();
+  });
+  cuerpo.addEventListener("paste", (e) => {
+    const texto = (e.clipboardData || window.clipboardData).getData("text");
+    if (!Grilla.esPegadoDeVarias(texto)) return;
+    e.preventDefault();
+    const celda = e.target;
+    const col = Number(celda.dataset.col);
+    let tr = celda.closest("tr");
+    let filas = Grilla.filasPegadas(texto);
+    // saltear encabezado copiado ("Ingrediente  Cantidad")
+    if (filas.length > 1 && col === 0 && filas[0].length > 1 && Number.isNaN(Grilla.num(filas[0][1]))) filas = filas.slice(1);
+    filas.forEach((celdas, k) => {
+      if (k > 0) tr = tr.nextElementSibling || fila();
+      if (col === 0) {
+        tr.querySelector(".c-nombre").value = celdas[0] || "";
+        if (celdas.length > 1) tr.querySelector(".c-cant").value = celdas[1] || "";
+      } else {
+        tr.querySelector(".c-cant").value = celdas[0] || "";
+      }
+    });
+    marcarSucio(); asegurarFilaVacia(); recalcular();
+  });
+  Grilla.teclado(tabla, () => fila());
+  document.getElementById("agregar-fila").addEventListener("click", () => {
+    const tr = fila(); recalcular(); tr.querySelector(".c-nombre").focus();
+  });
+  botonDescartar.addEventListener("click", () => {
+    cargar(inicial); sucio = false; botonGuardar.disabled = true; botonDescartar.hidden = true; estado.textContent = "";
+  });
+  botonGuardar.addEventListener("click", async () => {
+    const lineas = [...cuerpo.rows].map((tr) => ({
+      nombre: tr.querySelector(".c-nombre").value, cantidad: tr.querySelector(".c-cant").value }));
+    botonGuardar.disabled = true;
+    estado.textContent = "Guardando…";
+    const r = await Grilla.guardar(urlGuardar, { lineas }, csrf);
+    if (r.ok) { sucio = false; location.reload(); return; }
+    botonGuardar.disabled = false;
+    (r.errores || []).forEach((err) => {
+      const tr = cuerpo.rows[err.fila];
+      if (!tr) return;
+      const campo = tr.querySelector(err.campo === "cantidad" ? ".c-cant" : ".c-nombre");
+      campo.classList.add("invalido", "error-servidor");
+      campo.title = err.mensaje;
+    });
+    estado.textContent = "No se guardó: " + (r.errores || []).map((e) => `fila ${e.fila + 1}: ${e.mensaje}`).join(" · ");
+  });
+  Grilla.avisoSinGuardar(() => sucio);
+  cargar(inicial);
+})();
 </script>
 {% endblock %}

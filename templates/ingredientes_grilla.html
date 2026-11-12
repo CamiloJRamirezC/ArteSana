@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block titulo %}Ingredientes en grilla{% endblock %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('ingredientes') }}">← Ingredientes</a></p>
+<div class="encabezado">
+  <h1>Ingredientes en grilla</h1>
+  <div class="acciones">
+    <span class="nota" id="estado-grilla"></span>
+    <button class="boton secundario" id="descartar" hidden>Descartar cambios</button>
+    <button class="boton" id="guardar" disabled>Guardar</button>
+  </div>
+</div>
+<section class="tarjeta">
+  <p class="ayuda" style="margin:0 0 .75rem">Editá directo en la tabla y usá <kbd>Enter</kbd> para avanzar. Para cargar o actualizar muchos de una vez,
+    <strong>pegá desde Excel</strong> estas columnas: <em>Ingrediente, Presentación, Unidad, Precio</em> (y Notas, si querés).
+    Si un ingrediente ya existe, se actualiza su fila; si no, se agrega al final. Cada cambio de precio queda en el historial.</p>
+  <input type="search" id="buscar" placeholder="Buscar…" class="buscador" aria-label="Buscar ingrediente">
+  <div class="tabla-scroll">
+  <table class="grilla" id="grilla">
+    <thead><tr><th>Ingrediente</th><th class="num">Presentación</th><th>Unidad</th><th class="num">Precio (Gs)</th>
+      <th class="num">Precio por g/ml/u</th><th class="solo-ancho">Notas</th><th class="num solo-ancho">Recetas</th></tr></thead>
+    <tbody></tbody>
+    <tfoot><tr><td colspan="7"><button class="enlace" id="agregar-fila" type="button">+ Agregar fila</button></td></tr></tfoot>
+  </table>
+  </div>
+  <datalist id="unidades"><option value="g"><option value="kg"><option value="ml"><option value="l"><option value="u"></datalist>
+  <p class="nota">Para borrar un ingrediente, abrilo desde la <a href="{{ url_for('ingredientes') }}">lista</a> (solo se puede si no se usa en recetas).</p>
+</section>
+
+<script src="{{ url_for('static', filename='grilla.js') }}"></script>
+<script>
+(() => {
+  const inicial = {{ filas|tojson }};
+  const csrf = {{ csrf_token()|tojson }};
+  const urlGuardar = {{ url_for('ingredientes_grilla_guardar')|tojson }};
+  const UNIDADES = { g: "g", gr: "g", grs: "g", gramo: "g", gramos: "g", kg: "kg", kgs: "kg", kilo: "kg", kilos: "kg",
+    ml: "ml", cc: "ml", l: "l", lt: "l", lts: "l", litro: "l", litros: "l", u: "u", un: "u", und: "u", unid: "u",
+    unidad: "u", unidades: "u" };
+  const BASE = { g: "g", kg: "g", ml: "ml", l: "ml", u: "u" };
+  const FACTOR = { g: 1, kg: 1000, ml: 1, l: 1000, u: 1 };
+  const COLS = ["nombre", "presentacion", "unidad", "precio", "notas"];
+  const tabla = document.getElementById("grilla");
+  const cuerpo = tabla.tBodies[0];
+  const botonGuardar = document.getElementById("guardar");
+  const botonDescartar = document.getElementById("descartar");
+  const estado = document.getElementById("estado-grilla");
+
+  const unidad = (t) => UNIDADES[Grilla.normalizar(t).replace(/\.$/, "")] || null;
+  const texto = (v, campo) => (typeof v === "number" ? Grilla.formato(v, campo === "precio" ? 2 : 3) : (v ?? ""));
+
+  function fila(datos = {}) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input data-col="0" class="c-nombre" placeholder="Nuevo ingrediente…"></td>
+      <td class="num"><input data-col="1" class="c-presentacion" inputmode="decimal"></td>
+      <td><input data-col="2" class="c-unidad corto" list="unidades"></td>
+      <td class="num"><input data-col="3" class="c-precio" inputmode="decimal"></td>
+      <td class="num c-unitario"></td>
+      <td class="solo-ancho"><input data-col="4" class="c-notas"></td>
+      <td class="num solo-ancho c-usos"></td>`;
+    tr.dataset.id = datos.id ?? "";
+    const original = {};
+    COLS.forEach((c) => {
+      const v = texto(datos[c], c);
+      tr.querySelector(".c-" + c).value = v;
+      original[c] = v;
+    });
+    tr.dataset.original = JSON.stringify(datos.id ? original : {});
+    tr.querySelector(".c-usos").textContent = datos.usos || "";
+    cuerpo.appendChild(tr);
+    return tr;
+  }
+
+  const valores = (tr) => Object.fromEntries(COLS.map((c) => [c, tr.querySelector(".c-" + c).value.trim()]));
+  const vacia = (tr) => COLS.every((c) => !tr.querySelector(".c-" + c).value.trim());
+  function cambiada(tr) {
+    if (!tr.dataset.id) return !vacia(tr);
+    const o = JSON.parse(tr.dataset.original);
+    return COLS.some((c) => String(o[c] ?? "").trim() !== tr.querySelector(".c-" + c).value.trim());
+  }
+
+  function recalcular() {
+    let n = 0;
+    [...cuerpo.rows].forEach((tr) => {
+      const v = valores(tr);
+      const u = unidad(v.unidad), p = Grilla.num(v.presentacion), precio = Grilla.num(v.precio);
+      const filaVacia = vacia(tr);
+      tr.querySelector(".c-unidad").classList.toggle("invalido", !filaVacia && !u);
+      tr.querySelector(".c-presentacion").classList.toggle("invalido", !filaVacia && !(p > 0));
+      tr.querySelector(".c-precio").classList.toggle("invalido", !filaVacia && (precio === null || Number.isNaN(precio) || precio < 0));
+      tr.querySelector(".c-nombre").classList.toggle("invalido", !filaVacia && !v.nombre);
+      tr.querySelector(".c-unitario").textContent = u && p > 0 && precio >= 0
+        ? Grilla.formato(precio / (p * FACTOR[u]), 2) + " / " + BASE[u] : "";
+      const c = cambiada(tr);
+      tr.classList.toggle("cambiada", c);
+      if (c) n += 1;
+    });
+    botonGuardar.disabled = n === 0;
+    botonDescartar.hidden = n === 0;
+    estado.textContent = n ? `${n} fila(s) con cambios sin guardar` : "";
+  }
+
+  function asegurarFilaVacia() {
+    const ultima = cuerpo.rows[cuerpo.rows.length - 1];
+    if (!ultima || !vacia(ultima)) fila();
+  }
+
+  function cargar() {
+    cuerpo.innerHTML = "";
+    inicial.forEach((d) => fila(d));
+    asegurarFilaVacia();
+    recalcular();
+  }
+
+  function filaPorNombre(nombre) {
+    const clave = Grilla.normalizar(nombre);
+    return [...cuerpo.rows].find((tr) => clave && Grilla.normalizar(tr.querySelector(".c-nombre").value) === clave);
+  }
+
+  cuerpo.addEventListener("input", (e) => { e.target.classList.remove("error-servidor"); asegurarFilaVacia(); recalcular(); });
+  cuerpo.addEventListener("paste", (e) => {
+    const t = (e.clipboardData || window.clipboardData).getData("text");
+    if (!Grilla.esPegadoDeVarias(t)) return;
+    e.preventDefault();
+    const col = Number(e.target.dataset.col);
+    let filas = Grilla.filasPegadas(t);
+    if (col === 0 && filas.length > 1 && filas[0].length > 1 && Number.isNaN(Grilla.num(filas[0][1]))) filas = filas.slice(1);
+    let tr = e.target.closest("tr");
+    filas.forEach((celdas, k) => {
+      let destino;
+      if (col === 0) {
+        // pegar una lista: si el ingrediente ya existe, se actualiza su fila
+        destino = filaPorNombre(celdas[0]) || (k === 0 && vacia(tr) ? tr : null);
+        if (!destino) { asegurarFilaVacia(); destino = cuerpo.rows[cuerpo.rows.length - 1]; }
+      } else {
+        destino = k === 0 ? tr : (tr.nextElementSibling || fila());
+        tr = destino;
+      }
+      celdas.forEach((valor, j) => {
+        const campo = COLS[col + j];
+        if (campo) destino.querySelector(".c-" + campo).value = campo === "unidad" ? (unidad(valor) || valor) : valor;
+      });
+      asegurarFilaVacia();
+    });
+    recalcular();
+  });
+  Grilla.teclado(tabla, () => fila());
+  document.getElementById("agregar-fila").addEventListener("click", () => {
+    const tr = fila(); recalcular(); tr.querySelector(".c-nombre").focus();
+  });
+  document.getElementById("buscar").addEventListener("input", (e) => {
+    const t = Grilla.normalizar(e.target.value);
+    [...cuerpo.rows].forEach((tr) => {
+      tr.hidden = !!t && !vacia(tr) && !Grilla.normalizar(tr.querySelector(".c-nombre").value).includes(t);
+    });
+  });
+  botonDescartar.addEventListener("click", cargar);
+  botonGuardar.addEventListener("click", async () => {
+    const filas = [];
+    [...cuerpo.rows].forEach((tr, indice) => {
+      if (!cambiada(tr)) return;
+      const v = valores(tr);
+      filas.push({ indice, id: tr.dataset.id ? Number(tr.dataset.id) : null, ...v, unidad: unidad(v.unidad) || v.unidad });
+    });
+    botonGuardar.disabled = true;
+    estado.textContent = "Guardando…";
+    const r = await Grilla.guardar(urlGuardar, { filas }, csrf);
+    if (r.ok) { inicial.length = 0; location.reload(); return; }
+    botonGuardar.disabled = false;
+    (r.errores || []).forEach((err) => {
+      const tr = cuerpo.rows[err.fila];
+      const campo = tr && tr.querySelector(".c-" + (err.campo || "nombre"));
+      if (campo) { campo.classList.add("invalido", "error-servidor"); campo.title = err.mensaje; }
+      if (tr) tr.hidden = false;
+    });
+    estado.textContent = "No se guardó nada: " + (r.errores || []).map((e) => {
+      const tr = cuerpo.rows[e.fila];
+      const nombre = tr ? tr.querySelector(".c-nombre").value : "";
+      return `${nombre || "fila " + (e.fila + 1)}: ${e.mensaje}`;
+    }).join(" · ");
+  });
+  Grilla.avisoSinGuardar(() => [...cuerpo.rows].some(cambiada));
+  cargar();
+})();
+</script>
+{% endblock %}

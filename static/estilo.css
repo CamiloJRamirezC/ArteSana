@@ -119,3 +119,24 @@ tbody tr:hover { background: #fffaf4; }
   .cantidad-form .mini { padding: .15rem .3rem; }
   th, td { padding: .5rem .35rem; }
 }
+
+/* ---------- grillas */
+.grilla td { padding: .2rem .3rem; }
+.grilla input { margin: 0; padding: .35rem .45rem; border-color: transparent; background: transparent; border-radius: 6px; }
+.grilla input:hover { border-color: #e4d6c6; }
+.grilla input:focus { background: #fff; border-color: var(--canela); outline: 2px solid #f1c9a6; }
+.grilla .c-cant, .grilla .c-presentacion, .grilla .c-precio { text-align: right; min-width: 6rem; }
+.grilla .c-nombre { min-width: 14rem; }
+.grilla .corto { width: 4.5rem; }
+.grilla .nro { color: var(--suave); font-size: .8rem; width: 2rem; }
+.grilla tr.cambiada { background: #fff8e8; }
+.grilla .invalido { border-color: var(--error) !important; background: #fdecea; }
+.grilla td.c-unidad, .grilla td.c-precio, .grilla td.c-unitario { color: var(--suave); font-size: .88rem; white-space: nowrap; }
+kbd { font: .8em/1 ui-monospace, monospace; border: 1px solid #d8cabb; border-bottom-width: 2px; border-radius: 4px; padding: .1rem .3rem; background: #fff; }
+.boton:disabled { opacity: .45; cursor: default; filter: none; }
+@media (max-width: 640px) {
+  .grilla .c-nombre { min-width: 8.5rem; }
+  .grilla .c-cant, .grilla .c-presentacion, .grilla .c-precio { min-width: 4.2rem; width: 4.8rem; }
+  .grilla .nro { display: none; }
+  .grilla th:first-child { display: none; }
+}

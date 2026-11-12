@@ -20,6 +20,26 @@ Se puede usar de dos formas:
 
 Los números se escriben al estilo paraguayo: `1.500` es mil quinientos y `2,5` es dos y medio.
 
+## Cargar rápido: grillas y Excel
+
+**Ingredientes de una receta (grilla).** En cada receta, los ingredientes se cargan como en una planilla:
+escribís el nombre (se autocompleta), la cantidad y **Enter** para pasar a la siguiente fila; con las flechas ↑ ↓
+te movés entre filas. El costo de cada línea y el total se calculan mientras escribís. También podés
+**copiar dos columnas de Excel** (ingrediente y cantidad) y **pegarlas** en la grilla. Si algo está mal
+(un ingrediente que no existe, una cantidad vacía), se marca en rojo y no se guarda nada hasta corregirlo.
+
+**Todos los ingredientes (grilla).** En *Ingredientes → Editar en grilla* editás todos juntos. Para actualizar
+precios, copiá de Excel las columnas *Ingrediente, Presentación, Unidad, Precio* y pegalas: los que ya existen
+se actualizan y los nuevos se agregan. Acepta unidades escritas como `gr`, `kilo`, `lts`, `cc`, `unidad`…
+
+**Importar y exportar Excel.** En *Ingredientes → Importar Excel*:
+- **Descargar Excel** baja todo lo cargado (hojas *Ingredientes*, *Productos* y *Recetas*); también hay una plantilla vacía.
+- Lo editás y lo **subís**. Antes de guardar ves una **vista previa** con qué se crea, qué cambia y qué filas tienen problemas.
+- Se busca por nombre (sin importar mayúsculas ni tildes): si existe se actualiza, si no se crea. **Nada se borra.**
+- Si una receta aparece en la hoja *Recetas*, sus ingredientes se reemplazan por los del Excel. Si alguna de sus
+  filas tiene un error, esa receta no se toca.
+- Acepta también la planilla `planilla/ArteSana_Lista_de_Materiales.xlsx` del principio.
+
 Cada vez que cambiás el precio de un ingrediente queda guardado en su **historial de precios**.
 Ese historial es la base para el paso siguiente: leer los precios del supermercado automáticamente.
 
@@ -181,10 +201,11 @@ servidor.py            servidor web local (waitress)
 artesana.env.ejemplo   configuración local por defecto
 app.py                 rutas y pantallas
 costeo.py              cálculo de costos (sin dependencias, fácil de probar)
+importexport.py        importar y exportar Excel (con vista previa)
 db.py                  base de datos: SQLite local / PostgreSQL en internet
 utils.py               lectura y formato de números (1.500 · 2,5)
 templates/             pantallas HTML
-static/                estilos, íconos, manifest y service worker (app instalable)
+static/                estilos, grillas (grilla.js), íconos, manifest y service worker (app instalable)
 tests/                 pruebas automáticas
 render.yaml            configuración de Render
 .github/               visita automática para que Supabase no pause la base

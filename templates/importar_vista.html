@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block titulo %}Vista previa de la importación{% endblock %}
+{% macro lista(titulo, nombres, clase='') %}
+  {% if nombres %}
+  <details {{ 'open' if nombres|length <= 12 }}>
+    <summary><strong>{{ nombres|length }}</strong> {{ titulo }}</summary>
+    <p class="{{ clase }}">{{ nombres|join(' · ') }}</p>
+  </details>
+  {% endif %}
+{% endmacro %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('importar') }}">← Elegir otro archivo</a></p>
+<section class="tarjeta">
+  <h1>Vista previa: {{ archivo }}</h1>
+  <p class="nota">Todavía no se guardó nada.</p>
+
+  <div class="resumen">
+    <div class="dato"><span>Ingredientes</span><strong>{{ res.ing_nuevos|length }} nuevos</strong>
+      <small>{{ res.ing_actualizados|length }} con cambios · {{ res.ing_iguales }} iguales</small></div>
+    <div class="dato"><span>Productos y subrecetas</span><strong>{{ res.rec_nuevas|length }} nuevos</strong>
+      <small>{{ res.rec_actualizadas|length }} con cambios · {{ res.rec_iguales }} iguales</small></div>
+    <div class="dato"><span>Recetas con ingredientes</span><strong>{{ res.lineas|length }}</strong>
+      <small>se reemplazan sus ingredientes por los del Excel</small></div>
+    <div class="dato {{ 'destacado' if res.errores }}"><span>Problemas</span><strong>{{ res.errores|length }}</strong>
+      <small>{{ 'esas filas no se importan' if res.errores else 'ninguno' }}</small></div>
+  </div>
+
+  {{ lista('ingredientes nuevos', res.ing_nuevos) }}
+  {{ lista('ingredientes con precio u otros datos cambiados', res.ing_actualizados) }}
+  {{ lista('productos o subrecetas nuevos', res.rec_nuevas) }}
+  {{ lista('productos o subrecetas con cambios', res.rec_actualizadas) }}
+  {% if res.lineas %}
+  <details {{ 'open' if res.lineas|length <= 12 }}>
+    <summary><strong>{{ res.lineas|length }}</strong> recetas a las que se les cargan los ingredientes</summary>
+    <p>{% for nombre, n in res.lineas %}{{ nombre }} ({{ n }}){{ ' · ' if not loop.last }}{% endfor %}</p>
+  </details>
+  {% endif %}
+
+  {% if res.errores %}
+  <h2 style="margin-top:1rem">Problemas encontrados</h2>
+  <div class="tabla-scroll">
+  <table>
+    <thead><tr><th>Hoja</th><th class="num">Fila</th><th>Qué pasa</th></tr></thead>
+    <tbody>
+    {% for hoja, fila, msg in res.errores %}
+      <tr><td>{{ hoja }}</td><td class="num">{{ fila or '' }}</td><td>{{ msg }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="nota">Podés corregir el Excel y volver a subirlo, o importar igual lo que está bien.</p>
+  {% endif %}
+
+  <div class="acciones" style="margin-top:1rem">
+    {% if res.hay_cambios %}
+    <form method="post" action="{{ url_for('importar_aplicar') }}" class="en-linea">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <button class="boton">{{ 'Importar lo que está bien' if res.errores else 'Importar' }}</button>
+    </form>
+    {% else %}
+    <p><strong>No hay nada nuevo para importar.</strong></p>
+    {% endif %}
+    <a class="boton secundario" href="{{ url_for('importar') }}">Cancelar</a>
+  </div>
+</section>
+{% endblock %}

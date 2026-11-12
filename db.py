@@ -7,6 +7,7 @@ Las consultas usan '?' como marcador; para PostgreSQL se traduce a '%s'.
 """
 import os
 import sqlite3
+from contextlib import contextmanager
 
 from flask import current_app, g
 
@@ -115,7 +116,7 @@ def consultar(sql, params=()):
     cur.execute(_sql(sql), params)
     filas = [dict(f) for f in cur.fetchall()]
     cur.close()
-    if g.get("db_tipo") == "postgres":
+    if g.get("db_tipo") == "postgres" and not g.get("db_lote"):
         conn.commit()  # cierra la transacción de lectura
     return filas
 
@@ -137,11 +138,31 @@ def ejecutar(sql, params=(), devolver_id=False):
             fila = cur.fetchone()
             nuevo_id = fila["id"] if isinstance(fila, dict) else fila[0]
         cur.close()
-        conn.commit()
+        if not g.get("db_lote"):
+            conn.commit()
         return nuevo_id
     except _errores_integridad() as e:
-        conn.rollback()
+        if not g.get("db_lote"):
+            conn.rollback()
         raise ErrorDeIntegridad(str(e)) from e
+
+
+@contextmanager
+def lote():
+    """Agrupa varias escrituras: se guardan todas juntas o ninguna."""
+    conn = conexion()
+    if g.get("db_lote"):
+        yield
+        return
+    g.db_lote = True
+    try:
+        yield
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        g.db_lote = False
 
 
 def crear_tablas():

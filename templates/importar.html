@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block titulo %}Importar Excel{% endblock %}
+{% block contenido %}
+<p class="migas"><a href="{{ url_for('ingredientes') }}">← Ingredientes</a></p>
+<section class="tarjeta angosta">
+  <h1>Importar desde Excel</h1>
+  <ol class="pasos">
+    <li><strong>Bajá el Excel</strong> con lo que ya tenés cargado y editalo, o empezá de la plantilla vacía:
+      <div class="acciones" style="margin:.5rem 0">
+        <a class="boton secundario" href="{{ url_for('exportar_excel') }}">⤓ Excel con mis datos</a>
+        <a class="boton secundario" href="{{ url_for('plantilla_excel') }}">⤓ Plantilla vacía</a>
+      </div>
+    </li>
+    <li>Completá las hojas <strong>Ingredientes</strong>, <strong>Productos</strong> y <strong>Recetas</strong>.
+      La hoja <em>Instrucciones</em> explica cada columna.</li>
+    <li>Subilo acá. <strong>Antes de guardar vas a ver qué cambia</strong>, y nada se borra.</li>
+  </ol>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Archivo de Excel (.xlsx)
+      <input type="file" name="archivo" accept=".xlsx,.xlsm" required>
+    </label>
+    <button class="boton">Ver qué se va a importar</button>
+  </form>
+  <p class="nota">También acepta la planilla <code>ArteSana_Lista_de_Materiales.xlsx</code> del principio.
+    Los nombres se comparan sin importar mayúsculas ni tildes: si un ingrediente ya existe, se actualiza su precio.</p>
+</section>
+{% endblock %}

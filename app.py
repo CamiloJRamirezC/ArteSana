@@ -15,6 +15,7 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template,
 
 import costeo
 import db
+import importexport
 from utils import cant, gs, gs_unit, parse_num, pct
 
 
@@ -27,6 +28,7 @@ def crear_app(config=None):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,
+        MAX_CONTENT_LENGTH=10 * 1024 * 1024,  # Excel de hasta 10 MB
         # Los define servicio.py cuando la app corre en tu computadora
         SERVICIO_CONTROL=os.environ.get("ARTESANA_CONTROL", ""),
         SERVICIO_ESTADO=os.environ.get("ARTESANA_ESTADO", ""),
@@ -115,7 +117,7 @@ def registrar_rutas(app):
         if app.config["APP_PASSWORD"] and not session.get("ok"):
             return redirect(url_for("login", siguiente=request.path))
         if request.method == "POST":
-            enviado = request.form.get("csrf", "")
+            enviado = request.form.get("csrf") or request.headers.get("X-CSRF-Token", "")
             if not hmac.compare_digest(enviado, session.get("csrf", "")):
                 abort(400, "El formulario venció. Volvé atrás y recargá la página.")
         return None
@@ -253,6 +255,11 @@ def registrar_rutas(app):
             abort(404)
         subrecetas_posibles = [r for r in recetas.values() if r["tipo"] == "subreceta"
                                and not costeo.crearia_ciclo(rid, r["id"], items)]
+        componentes = [{"nombre": i["nombre"], "tipo": "ingrediente",
+                        "unidad": costeo.unidad_base(i["presentacion_unidad"]),
+                        "precio": calculo["ingredientes"][i["id"]]} for i in ingredientes.values()]
+        componentes += [{"nombre": r["nombre"], "tipo": "subreceta", "unidad": r["unidad_rinde"],
+                         "precio": calculo["recetas"][r["id"]]["costo_unitario"]} for r in subrecetas_posibles]
         return render_template(
             "receta.html",
             receta=recetas[rid],
@@ -263,6 +270,9 @@ def registrar_rutas(app):
             costos_recetas=calculo["recetas"],
             usado_en=_usos_receta(rid, recetas, items),
             unidad_base=costeo.unidad_base,
+            componentes=componentes,
+            lineas_grilla=[{"nombre": ln["nombre"], "cantidad": ln["cantidad"]}
+                           for ln in calculo["recetas"][rid]["lineas"]],
             redondeo=redondeo,
         )
 
@@ -358,6 +368,58 @@ def registrar_rutas(app):
             flash("No se pudo agregar: el ingrediente ya no existe", "error")
         return redirect(url_for("receta", rid=rid) + "#lineas")
 
+    @app.post("/recetas/<int:rid>/grilla")
+    def receta_grilla(rid):
+        """Guarda todas las líneas de la grilla juntas. Si alguna fila está mal, no guarda nada."""
+        ingredientes, recetas, items, _, _ = _datos()
+        if rid not in recetas:
+            abort(404)
+        datos = request.get_json(silent=True) or {}
+        por_nombre_ing = {importexport.normalizar(i["nombre"]): i for i in ingredientes.values()}
+        por_nombre_sub = {importexport.normalizar(r["nombre"]): r for r in recetas.values() if r["tipo"] == "subreceta"}
+        otros = [it for it in items if it["receta_id"] != rid]
+        errores, lineas = [], []
+        for n, fila in enumerate(datos.get("lineas", [])):
+            nombre = importexport.limpiar_nombre(fila.get("nombre"))
+            texto_cant = str(fila.get("cantidad") or "").strip()
+            if not nombre and not texto_cant:
+                continue  # fila vacía
+            if not nombre:
+                errores.append({"fila": n, "campo": "nombre", "mensaje": "Falta el ingrediente"})
+                continue
+            clave = importexport.normalizar(nombre)
+            ing, sub = por_nombre_ing.get(clave), por_nombre_sub.get(clave)
+            if ing and sub:
+                errores.append({"fila": n, "campo": "nombre",
+                                "mensaje": f"«{nombre}» es a la vez ingrediente y subreceta: renombrá uno"})
+                continue
+            if not ing and not sub:
+                errores.append({"fila": n, "campo": "nombre", "mensaje": f"«{nombre}» no existe: cargalo en Ingredientes"})
+                continue
+            if sub and costeo.crearia_ciclo(rid, sub["id"], otros + [
+                    {"receta_id": rid, "subreceta_id": s} for _, s, _ in lineas if s]):
+                errores.append({"fila": n, "campo": "nombre",
+                                "mensaje": f"«{nombre}» ya contiene a esta receta (sería un ciclo)"})
+                continue
+            try:
+                cantidad = parse_num(texto_cant)
+            except ValueError as e:
+                errores.append({"fila": n, "campo": "cantidad", "mensaje": str(e)})
+                continue
+            if not cantidad or cantidad <= 0:
+                errores.append({"fila": n, "campo": "cantidad", "mensaje": "Falta la cantidad"})
+                continue
+            lineas.append((ing["id"] if ing else None, sub["id"] if sub else None, cantidad))
+        if errores:
+            return jsonify({"ok": False, "errores": errores}), 400
+        with db.lote():
+            db.ejecutar("DELETE FROM receta_items WHERE receta_id = ?", (rid,))
+            for orden, (iid, sid, cantidad) in enumerate(lineas, start=1):
+                db.ejecutar("INSERT INTO receta_items (receta_id, ingrediente_id, subreceta_id, cantidad, orden) "
+                            "VALUES (?, ?, ?, ?, ?)", (rid, iid, sid, cantidad, orden))
+        flash(f"Guardado: {len(lineas)} ingrediente(s)", "ok")
+        return jsonify({"ok": True, "lineas": len(lineas)})
+
     @app.post("/recetas/<int:rid>/lineas/<int:lid>")
     def linea_editar(rid, lid):
         try:
@@ -385,6 +447,90 @@ def registrar_rutas(app):
                   "usos": len(_usos_ingrediente(iid, recetas, items))}
                  for iid, i in ingredientes.items()]
         return render_template("ingredientes.html", filas=filas)
+
+    @app.get("/ingredientes/grilla")
+    def ingredientes_grilla():
+        ingredientes, recetas, items, calculo, _ = _datos()
+        filas = [{"id": iid, "nombre": i["nombre"], "presentacion": i["presentacion_cantidad"],
+                  "unidad": i["presentacion_unidad"], "precio": i["precio"], "notas": i.get("notas") or "",
+                  "usos": len(_usos_ingrediente(iid, recetas, items))}
+                 for iid, i in ingredientes.items()]
+        return render_template("ingredientes_grilla.html", filas=filas)
+
+    @app.post("/ingredientes/grilla")
+    def ingredientes_grilla_guardar():
+        """Guarda filas nuevas y cambiadas. Si alguna está mal, no guarda ninguna."""
+        ingredientes, recetas, items, _, _ = _datos()
+        datos = request.get_json(silent=True) or {}
+        hoy = date.today().isoformat()
+        nombres = {importexport.normalizar(i["nombre"]): iid for iid, i in ingredientes.items()}
+        errores, cambios, vistos = [], [], {}
+        for fila in datos.get("filas", []):
+            n = fila.get("indice")
+            iid = fila.get("id")
+            nombre = importexport.limpiar_nombre(fila.get("nombre"))
+            if iid is not None and iid not in ingredientes:
+                errores.append({"fila": n, "campo": "nombre", "mensaje": "Ese ingrediente ya no existe (recargá la página)"})
+                continue
+            if not nombre:
+                errores.append({"fila": n, "campo": "nombre", "mensaje": "Falta el nombre"})
+                continue
+            clave = importexport.normalizar(nombre)
+            otro = nombres.get(clave)
+            if (otro is not None and otro != iid) or (clave in vistos and vistos[clave] != iid):
+                errores.append({"fila": n, "campo": "nombre", "mensaje": f"«{nombre}» está repetido"})
+                continue
+            vistos[clave] = iid
+            unidad = importexport.unidad(fila.get("unidad"))
+            if not unidad:
+                errores.append({"fila": n, "campo": "unidad", "mensaje": "Unidad no válida (g, kg, ml, l o u)"})
+                continue
+            try:
+                presentacion = parse_num(fila.get("presentacion"))
+                precio = parse_num(fila.get("precio"))
+            except ValueError as e:
+                errores.append({"fila": n, "campo": "precio", "mensaje": str(e)})
+                continue
+            if not presentacion or presentacion <= 0:
+                errores.append({"fila": n, "campo": "presentacion", "mensaje": "Falta la presentación (cuánto trae)"})
+                continue
+            if precio is None or precio < 0:
+                errores.append({"fila": n, "campo": "precio", "mensaje": "Falta el precio"})
+                continue
+            if iid is not None:
+                actual = ingredientes[iid]
+                if (costeo.unidad_base(unidad) != costeo.unidad_base(actual["presentacion_unidad"])
+                        and _usos_ingrediente(iid, recetas, items)):
+                    errores.append({"fila": n, "campo": "unidad",
+                                    "mensaje": "Ya se usa en recetas: no se puede pasar de "
+                                               f"{costeo.unidad_base(actual['presentacion_unidad'])} a {costeo.unidad_base(unidad)}"})
+                    continue
+            cambios.append((iid, nombre, presentacion, unidad, precio,
+                            importexport.limpiar_nombre(fila.get("notas")) or None))
+        if errores:
+            return jsonify({"ok": False, "errores": errores}), 400
+        nuevos = actualizados = 0
+        with db.lote():
+            for iid, nombre, presentacion, unidad, precio, notas in cambios:
+                if iid is None:
+                    nuevo = db.ejecutar("INSERT INTO ingredientes (nombre, presentacion_cantidad, presentacion_unidad, "
+                                        "precio, fecha_precio, notas) VALUES (?, ?, ?, ?, ?, ?)",
+                                        (nombre, presentacion, unidad, precio, hoy, notas), devolver_id=True)
+                    _registrar_precio(nuevo, presentacion, unidad, precio)
+                    nuevos += 1
+                    continue
+                actual = ingredientes[iid]
+                cambio_precio = (presentacion, unidad, precio) != (
+                    actual["presentacion_cantidad"], actual["presentacion_unidad"], actual["precio"])
+                db.ejecutar("UPDATE ingredientes SET nombre=?, presentacion_cantidad=?, presentacion_unidad=?, precio=?, "
+                            "fecha_precio=?, notas=? WHERE id=?",
+                            (nombre, presentacion, unidad, precio, hoy if cambio_precio else actual["fecha_precio"],
+                             notas, iid))
+                if cambio_precio:
+                    _registrar_precio(iid, presentacion, unidad, precio)
+                actualizados += 1
+        flash(f"Guardado: {nuevos} nuevo(s), {actualizados} actualizado(s)", "ok")
+        return jsonify({"ok": True, "nuevos": nuevos, "actualizados": actualizados})
 
     def _form_ingrediente():
         unidad = request.form.get("presentacion_unidad", "g")
@@ -467,6 +613,76 @@ def registrar_rutas(app):
         db.ejecutar("DELETE FROM ingredientes WHERE id = ?", (iid,))
         flash(f"Ingrediente «{ingredientes[iid]['nombre']}» borrado", "ok")
         return redirect(url_for("ingredientes"))
+
+    # ---------- Excel: importar y exportar
+    def _carpeta_importaciones():
+        carpeta = Path(app.instance_path) / "importaciones"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        import time as _t
+        for viejo in carpeta.glob("*.json"):  # limpiar vistas previas de más de un día
+            if _t.time() - viejo.stat().st_mtime > 86400:
+                viejo.unlink(missing_ok=True)
+        return carpeta
+
+    @app.get("/importar")
+    def importar():
+        return render_template("importar.html")
+
+    @app.post("/importar")
+    def importar_vista():
+        archivo = request.files.get("archivo")
+        if not archivo or not archivo.filename:
+            flash("Elegí un archivo de Excel", "error")
+            return redirect(url_for("importar"))
+        if not archivo.filename.lower().endswith((".xlsx", ".xlsm")):
+            flash("El archivo tiene que ser de Excel (.xlsx). Si es .xls viejo, abrilo en Excel y guardalo como .xlsx", "error")
+            return redirect(url_for("importar"))
+        import io as _io
+        datos = importexport.leer_excel(_io.BytesIO(archivo.read()))
+        res = importexport.procesar(datos, aplicar=False)
+        token = secrets.token_hex(12)
+        (_carpeta_importaciones() / f"{token}.json").write_text(
+            json.dumps(datos, ensure_ascii=False, default=str), encoding="utf-8")
+        return render_template("importar_vista.html", res=res, token=token, archivo=archivo.filename)
+
+    @app.post("/importar/aplicar")
+    def importar_aplicar():
+        token = request.form.get("token", "")
+        ruta = _carpeta_importaciones() / f"{token}.json"
+        if not token.isalnum() or not ruta.exists():
+            flash("La vista previa venció. Volvé a subir el archivo.", "error")
+            return redirect(url_for("importar"))
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        try:
+            res = importexport.importar(datos)
+        except db.ErrorDeIntegridad as e:
+            flash(f"No se importó nada: {e}", "error")
+            return redirect(url_for("importar"))
+        ruta.unlink(missing_ok=True)
+        partes = []
+        if res["ing_nuevos"] or res["ing_actualizados"]:
+            partes.append(f"{len(res['ing_nuevos'])} ingrediente(s) nuevo(s) y {len(res['ing_actualizados'])} actualizado(s)")
+        if res["rec_nuevas"] or res["rec_actualizadas"]:
+            partes.append(f"{len(res['rec_nuevas'])} receta(s) nueva(s) y {len(res['rec_actualizadas'])} actualizada(s)")
+        if res["lineas"]:
+            partes.append(f"ingredientes cargados en {len(res['lineas'])} receta(s)")
+        flash("Importado: " + "; ".join(partes) if partes else "No había cambios para importar", "ok")
+        if res["errores"]:
+            flash(f"{len(res['errores'])} fila(s) con problemas no se importaron (los viste en la vista previa)", "error")
+        return redirect(url_for("productos"))
+
+    def _excel(contenido, nombre):
+        from flask import Response
+        return Response(contenido, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
+
+    @app.get("/exportar.xlsx")
+    def exportar_excel():
+        return _excel(importexport.exportar(), f"ArteSana_{date.today().isoformat()}.xlsx")
+
+    @app.get("/plantilla.xlsx")
+    def plantilla_excel():
+        return _excel(importexport.exportar(vacio=True), "ArteSana_plantilla.xlsx")
 
     # ---------- configuración y ejemplo
     @app.route("/configuracion", methods=["GET", "POST"])

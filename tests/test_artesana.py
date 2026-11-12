@@ -134,7 +134,7 @@ def test_flujo_completo(cliente):
     for rid in (1, 2):
         assert cliente.get(f"/recetas/{rid}").status_code == 200
     det = cliente.get("/recetas/2").get_data(as_text=True)
-    assert "Dulce de leche casero" in det and "12.456" in det
+    assert "Dulce de leche casero" in det and "50.806" in det   # total de la tanda (servidor)
 
     # páginas de ingredientes y configuración
     assert "20,76" not in cliente.get("/ingredientes").get_data(as_text=True)  # subreceta no es ingrediente
@@ -153,21 +153,35 @@ def test_flujo_completo(cliente):
     html = post(cliente, "/recetas/nueva", nombre="Pan dulce", tipo="venta", rinde="2,4",
                 unidad_rinde="kg", multiplicador="3", notas="").get_data(as_text=True)
     assert "Pan dulce" in html
-    rid = int(re.search(r'/recetas/(\d+)/lineas"', html).group(1))
-    ing_choco = 12
-    html = post(cliente, f"/recetas/{rid}/lineas", componente=f"i:{ing_choco}", cantidad="300").get_data(as_text=True)
-    assert "25.500" in html  # 300 g x 85 Gs/g
-    # 25.500 / 2,4 kg = 10.625 por kg -> x3 = 31.875 -> 31.900
-    assert "31.900" in html
+    rid = int(re.search(r'/recetas/(\d+)/grilla"', html).group(1))
 
-    # editar cantidad de la línea
-    lid = int(re.search(rf'/recetas/{rid}/lineas/(\d+)"', html).group(1))
-    html = post(cliente, f"/recetas/{rid}/lineas/{lid}", cantidad="600").get_data(as_text=True)
-    assert "51.000" in html
+    def grilla(rid, lineas):
+        return cliente.post(f"/recetas/{rid}/grilla", json={"lineas": lineas}, headers={"X-CSRF-Token": "tok"})
+
+    r = grilla(rid, [{"nombre": "chocolate COBERTURA", "cantidad": "300"}, {"nombre": "", "cantidad": ""}])
+    assert r.get_json() == {"ok": True, "lineas": 1}
+    html = cliente.get("/").get_data(as_text=True)
+    # 300 g x 85 Gs/g = 25.500 / 2,4 kg = 10.625 por kg -> x3 = 31.875 -> 31.900
+    assert "25.500" in html and "31.900" in html
+
+    # la grilla reemplaza todo: cambiar cantidad y agregar otra línea
+    r = grilla(rid, [{"nombre": "Chocolate cobertura", "cantidad": "600"}, {"nombre": "Huevo", "cantidad": "2"}])
+    assert r.get_json()["lineas"] == 2
+    assert "53.000" in cliente.get("/").get_data(as_text=True)    # 51.000 + 2 huevos
+
+    # errores: no guarda nada y dice qué fila
+    r = grilla(rid, [{"nombre": "Chocolate cobertura", "cantidad": "100"}, {"nombre": "Unicornio", "cantidad": "5"},
+                     {"nombre": "Huevo", "cantidad": "abc"}])
+    assert r.status_code == 400
+    errores = r.get_json()["errores"]
+    assert [(e["fila"], e["campo"]) for e in errores] == [(1, "nombre"), (2, "cantidad")]
+    assert "53.000" in cliente.get("/").get_data(as_text=True)    # quedó como estaba
 
     # subreceta: no puede contenerse a sí misma
-    html = post(cliente, "/recetas/1/lineas", componente="r:1", cantidad="10").get_data(as_text=True)
-    assert "ya contiene a esta receta" in html
+    r = grilla(1, [{"nombre": "Dulce de leche casero", "cantidad": "10"}])
+    assert r.status_code == 400 and "ciclo" in r.get_json()["errores"][0]["mensaje"]
+    # sin token CSRF no se acepta
+    assert cliente.post(f"/recetas/{rid}/grilla", json={"lineas": []}).status_code == 400
 
     # no se borra lo que está en uso
     html = post(cliente, "/ingredientes/1/borrar").get_data(as_text=True)
@@ -253,3 +267,110 @@ def test_sistema_con_servicio(tmp_path):
     c.post("/sistema/actualizar", data={"csrf": "tok"})
     assert (control / "actualizar").exists()
     assert c.post("/sistema/borrar_todo", data={"csrf": "tok"}).status_code == 404
+
+
+# ------------------------------------------------------------ grilla de ingredientes e importación
+
+def test_grilla_de_ingredientes(cliente):
+    entrar(cliente)
+    post(cliente, "/ejemplo")
+    assert cliente.get("/ingredientes/grilla").status_code == 200
+
+    def guardar(filas):
+        return cliente.post("/ingredientes/grilla", json={"filas": filas}, headers={"X-CSRF-Token": "tok"})
+
+    r = guardar([{"indice": 0, "id": 1, "nombre": "Harina 000", "presentacion": "1", "unidad": "Kg", "precio": "6.500"},
+                 {"indice": 20, "id": None, "nombre": "Chocolate", "presentacion": "1", "unidad": "kilos", "precio": "85.000"}])
+    assert r.get_json() == {"ok": True, "nuevos": 1, "actualizados": 1}
+    html = cliente.get("/ingredientes").get_data(as_text=True)
+    assert "6.500" in html and "Chocolate" in html
+    assert "6.500" in cliente.get("/ingredientes/1").get_data(as_text=True)      # quedó en el historial
+
+    r = guardar([{"indice": 3, "id": None, "nombre": "harina 000", "presentacion": "1", "unidad": "kg", "precio": "1"},
+                 {"indice": 4, "id": 5, "nombre": "Huevo", "presentacion": "30", "unidad": "kg", "precio": "1"},
+                 {"indice": 5, "id": None, "nombre": "Sal", "presentacion": "1", "unidad": "taza", "precio": "1"}])
+    assert r.status_code == 400
+    assert [(e["fila"], e["campo"]) for e in r.get_json()["errores"]] == [(3, "nombre"), (4, "unidad"), (5, "unidad")]
+    assert "<strong>Sal</strong>" not in cliente.get("/ingredientes").get_data(as_text=True)  # no guardó nada
+
+
+def test_importar_y_exportar_excel(cliente):
+    import io
+    from openpyxl import Workbook
+    entrar(cliente)
+    post(cliente, "/ejemplo")
+
+    # exportar y volver a importar sin cambios
+    r = cliente.get("/exportar.xlsx")
+    assert r.status_code == 200 and r.data[:2] == b"PK"
+    html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(r.data), "a.xlsx")},
+                        content_type="multipart/form-data").get_data(as_text=True)
+    assert "No hay nada nuevo para importar" in html
+
+    # Excel armado a mano, con encabezados y unidades "a mi manera"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ingredientes"
+    ws.append(["INGREDIENTE", "Presentacion", "unidad", "Precio Gs", "Dónde compro"])
+    ws.append(["Maicena", 500, "gr", "8.000", "Superseis"])           # actualiza (cambia de 1 kg a 500 g)
+    ws.append(["Chocolate semiamargo", "1", "Kilo", 85000, None])     # nuevo
+    ws.append(["Sal", 1, "taza", 1000, None])                         # error de unidad
+    ws2 = wb.create_sheet("Productos")
+    ws2.append(["Receta", "Tipo", "Rinde", "Unidad del rinde", "Multiplicador"])
+    ws2.append(["Bombones", "venta", 4, "cajas", 4])
+    ws2.append(["Ganache", "Subreceta", "0,8", "kg", None])           # 0,8 kg -> 800 g
+    ws3 = wb.create_sheet("Recetas")
+    ws3.append(["Receta", "Ingrediente", "Cantidad"])
+    ws3.append(["Ganache", "Chocolate semiamargo", 500])
+    ws3.append(["Ganache", "Leche entera", 300])
+    ws3.append(["Bombones", "chocolate semiamargo", 400])
+    ws3.append(["Bombones", "GANACHE", 600])
+    ws3.append(["Alfajores de maicena", "Harina 000", 200])
+    ws3.append(["Alfajores de maicena", "Polvo de unicornio", 1])     # error -> no toca los alfajores
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(buf.getvalue()), "mio.xlsx")},
+                        content_type="multipart/form-data").get_data(as_text=True)
+    assert "Vista previa" in html and "Importar lo que está bien" in html
+    assert "unidad «taza» no válida" in html and "Polvo de unicornio" in html
+    assert "Alfajores de maicena» no se modificó" in html
+    token = re.search(r'name="token" value="([0-9a-f]+)"', html).group(1)
+    assert "Bombones" not in cliente.get("/").get_data(as_text=True)          # todavía nada
+
+    html = post(cliente, "/importar/aplicar", token=token).get_data(as_text=True)
+    assert "Importado" in html and "Bombones" in html and "Ganache" in html
+    # Ganache: 500 g x 85 + 300 ml x 8 = 42.500 + 2.400 = 44.900 / 800 g = 56,125 Gs/g
+    # Bombones: 400 x 85 + 600 x 56,125 = 34.000 + 33.675 = 67.675 / 4 cajas = 16.918,75 x4 = 67.675 -> 67.700
+    assert "44.900" in html and "67.700" in html
+    assert "5.100" not in html            # los alfajores cambiaron de precio por la maicena (8.000 x 500 g = 16 Gs/g)
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert '"cantidad": 200.0, "nombre": "Harina 000"' in det or '"nombre": "Harina 000", "cantidad": 200.0' in det
+    # la receta de alfajores no se tocó: sigue con sus 10 ingredientes
+    assert det.count('"nombre": ') >= 10
+    # el token ya se usó
+    assert "venció" in post(cliente, "/importar/aplicar", token=token).get_data(as_text=True)
+
+
+def test_importar_planilla_original(cliente):
+    import os
+    entrar(cliente)
+    ruta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "planilla",
+                        "ArteSana_Lista_de_Materiales.xlsx")
+    with open(ruta, "rb") as f:
+        html = cliente.post("/importar", data={"csrf": "tok", "archivo": (f, "planilla.xlsx")},
+                            content_type="multipart/form-data").get_data(as_text=True)
+    token = re.search(r'name="token" value="([0-9a-f]+)"', html).group(1)
+    html = post(cliente, "/importar/aplicar", token=token).get_data(as_text=True)
+    assert "5.100" in html and "50.806" in html        # mismos números que la planilla
+
+
+def test_archivo_que_no_es_excel(cliente):
+    import io
+    entrar(cliente)
+    html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(b"hola"), "x.xlsx")},
+                        content_type="multipart/form-data", follow_redirects=True).get_data(as_text=True)
+    assert "No es un Excel válido" in html
+    html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(b"a;b"), "x.csv")},
+                        content_type="multipart/form-data", follow_redirects=True).get_data(as_text=True)
+    assert "tiene que ser de Excel" in html
