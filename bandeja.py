@@ -170,7 +170,7 @@ class Controlador:
     # ---------- acciones del menú
     def abrir(self, *_):
         if self._foto()["corriendo"]:
-            webbrowser.open(sv.url_app())
+            sv.abrir_app()
         else:
             self.iniciar(abrir=True)
 
@@ -195,6 +195,15 @@ class Controlador:
             e = sv.leer_estado()
             return e.get("mensaje_actualizacion") or "Sin respuesta del servicio."
         self.accion("Buscando actualizaciones", hacer)
+
+    def puede_volver(self, *_):
+        return not self.ocupada and sv.puede_volver()
+
+    def volver(self, *_):
+        def hacer():
+            sv.cmd_volver()
+            return sv.leer_estado().get("mensaje_actualizacion") or "Listo."
+        self.accion("Volviendo a la versión anterior", hacer)
 
     def red(self, *_):
         self.consola("ArteSana - usar desde otros equipos", "servicio.py red")
@@ -270,7 +279,7 @@ class Controlador:
         if ahora["servidor"] == "error" and antes["servidor"] != "error":
             avisos.append("ArteSana no logra arrancar. Revisá el registro.")
         if (ahora["ultima_revision"] != antes["ultima_revision"]
-                and ahora["actualizacion"] == "aplicada"):
+                and ahora["actualizacion"] in ("aplicada", "restaurada")):
             avisos.append(ahora["mensaje_actualizacion"] or "ArteSana se actualizó.")
         cambio_visible = any(ahora[k] != antes[k] for k in ("corriendo", "servidor", "url_red", "version"))
         self.anterior = ahora
@@ -309,7 +318,7 @@ class Controlador:
             (sv.INST / "autoinicio_bandeja").write_text(sv.ahora(), encoding="utf-8")
         if self._foto()["corriendo"]:
             if abrir:
-                webbrowser.open(sv.url_app())
+                sv.abrir_app()
         else:
             self.iniciar(abrir=abrir)
         threading.Thread(target=self.vigilar, daemon=True).start()
@@ -333,6 +342,7 @@ class Controlador:
             Item("Ver registro", self.ver_registro),
             Item("Abrir carpeta de datos", self.carpeta_datos),
             Item("Más opciones", Menu(
+                Item("Volver a la versión anterior", self.volver, enabled=self.puede_volver),
                 Item("Iniciar con Windows", self.alternar_autoinicio, checked=self.autoinicio, enabled=self.libre),
                 Item("Crear accesos directos (escritorio y menú Inicio)", self.crear_accesos, enabled=self.libre),
                 Item("Reinstalar dependencias…", self.dependencias),
@@ -391,7 +401,7 @@ def main():
     if not unica:
         # Ya hay un ícono: solo abrir la app
         if sv.servicio_corriendo()[0]:
-            webbrowser.open(sv.url_app())
+            sv.abrir_app()
         else:
             sv.cmd_iniciar(abrir=True)
         return 0

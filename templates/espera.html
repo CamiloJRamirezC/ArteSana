@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block titulo %}{{ 'Actualizando' if accion == 'actualizar' else 'Reiniciando' }}{% endblock %}
+{% block titulo %}{{ {'actualizar': 'Actualizando', 'volver': 'Volviendo a la versión anterior'}.get(accion, 'Reiniciando') }}{% endblock %}
 {% block contenido %}
 <section class="tarjeta angosta">
-  <h1 id="titulo">{{ 'Buscando actualizaciones…' if accion == 'actualizar' else 'Reiniciando…' }}</h1>
+  <h1 id="titulo">{{ {'actualizar': 'Buscando actualizaciones…', 'volver': 'Volviendo a la versión anterior…'}.get(accion, 'Reiniciando…') }}</h1>
   <p id="detalle">Esto tarda unos segundos. La página sigue sola cuando termine.</p>
   <p><a href="{{ url_for('configuracion') }}" class="nota">Volver a Configuración</a></p>
 </section>
@@ -10,7 +10,7 @@
   const accion = {{ accion|tojson }}, revPrevia = {{ rev|tojson }}, iniPrevio = {{ ini|tojson }};
   const titulo = document.getElementById("titulo"), detalle = document.getElementById("detalle");
   const inicio = Date.now();
-  let esperandoReinicio = accion === "reiniciar";
+  let esperandoReinicio = accion === "reiniciar" || accion === "volver";
 
   async function revisar() {
     if (Date.now() - inicio > 180000) {

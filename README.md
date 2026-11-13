@@ -79,13 +79,14 @@ Ese historial es la base para el paso siguiente: leer los precios del supermerca
 ## Usarla en tu computadora con Windows
 
 ### Instalación (una sola vez)
-1. Instalá **Python 3.10+** (desde una terminal: `winget install --id Python.Python.3.12 -e`).
-2. Bajá el proyecto de una de estas dos formas:
+1. Bajá el proyecto de una de estas dos formas:
    - **Sin Git:** en GitHub, botón verde **Code → Download ZIP**, y descomprimilo donde quieras.
    - **Con Git:** `git clone https://github.com/CamiloJRamirezC/ArteSana.git`
-3. Abrí la carpeta y hacé doble clic en **`artesana.bat`**. La primera vez instala todo.
+2. Abrí la carpeta y hacé doble clic en **`artesana.bat`**. La primera vez instala todo, **incluso Python si no
+   está** (solo para tu usuario, sin pedir permisos de administrador).
 
 Git es **opcional**: la app se actualiza igual sin Git.
+Si la app no arranca, `artesana.bat consola` la corre en la ventana y muestra el error.
 
 ### El ícono de ArteSana (junto al reloj)
 Doble clic en **`artesana.bat`** (o en el acceso directo **ArteSana** del escritorio, que se crea solo la primera vez):
@@ -117,17 +118,24 @@ se actualiza, cuando se detiene o cuando algo falla.
 El menú clásico en consola sigue disponible: `artesana.bat menu`. También funcionan los comandos directos:
 `artesana.bat iniciar`, `artesana.bat detener`, `artesana.bat actualizar`, `artesana.bat red`, etc.
 
-### Actualizaciones automáticas
-Mientras está corriendo, el servicio revisa GitHub **cada 30 minutos**. Si hay cambios:
-1. guarda una copia de los datos en `instance\respaldos` (quedan las últimas 10),
-2. baja los cambios: con Git si la carpeta es un clon y Git está instalado (lo busca también donde lo
-   deja GitHub Desktop); si no, descarga la versión nueva directamente de GitHub,
-3. reinstala dependencias si cambió `requirements.txt`,
-4. reinicia la app.
+### Actualizaciones automáticas (sin Git)
+Mientras está corriendo, el servicio revisa GitHub **cada 30 minutos** (igual que RiplayWEB):
 
-Si en esa computadora hay archivos del proyecto modificados a mano, **no actualiza** (para no pisarlos) y lo avisa.
-También podés buscar actualizaciones y reiniciar desde la app: **Configuración → Sistema**.
-Si la app se cierra por un error, el servicio la vuelve a levantar sola.
+1. Compara **cada archivo** con el de GitHub usando la misma huella que git: sabe exactamente qué cambió,
+   aunque no sepa qué versión tenés. **No necesita Git instalado** y funciona igual si bajaste el ZIP.
+2. Si hay cambios, guarda un respaldo de tus datos en `instance\respaldos` (los últimos 10).
+3. Descarga la versión nueva, **verifica la huella de cada archivo** y que el código no tenga errores. Si algo no
+   coincide, no cambia nada.
+4. Guarda una **copia de los archivos que va a reemplazar** en `instance\respaldos_programa` (las últimas 3) y
+   recién ahí los escribe. Si falla a mitad de camino, deja todo como estaba.
+5. Reinstala dependencias si cambió `requirements.txt` y reinicia todo el servicio.
+
+Si editaste a mano algún archivo del programa, se reemplaza por el de GitHub (queda la copia).
+**Volver a la versión anterior:** ícono junto al reloj → Más opciones, o Configuración → Sistema, o `artesana.bat volver`.
+En **Configuración → Sistema** también ves la versión instalada y las **novedades**.
+Tus datos (`instance`) y tu configuración (`artesana.env`) nunca se tocan.
+
+Si el repositorio fuera privado, cargá en `artesana.env` un token de GitHub de solo lectura: `GITHUB_TOKEN=...`
 
 ### Instalarla desde el navegador
 Con la app abierta en Chrome o Edge, tocá **«⤓ Instalar app»** arriba a la derecha, o el ícono de instalar
@@ -230,6 +238,7 @@ proveedor de dominio el registro DNS que Render te muestra.
 artesana.bat           instala la primera vez y abre el ícono de la bandeja (artesana.bat menu = menú en consola)
 bandeja.py             ícono junto al reloj con todas las opciones
 servicio.py            servicio en segundo plano: corre la app, la vigila y la actualiza desde GitHub
+actualizador.py        actualización archivo por archivo desde GitHub, con copia y vuelta atrás (de RiplayWEB)
 servidor.py            servidor web local (waitress)
 artesana.env.ejemplo   configuración local por defecto
 app.py                 rutas y pantallas

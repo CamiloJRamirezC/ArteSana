@@ -59,7 +59,7 @@
       <tr><th>Servidor</th><td>{{ sistema.get('servidor', '—') }} · desde {{ sistema.get('servidor_iniciado', '—') }}</td></tr>
       <tr><th>GitHub</th><td>{{ sistema.get('mensaje_actualizacion', 'Todavía no se revisó') }}
         {% if sistema.get('ultima_revision') %}<br><small class="nota">Revisado {{ sistema.ultima_revision }}</small>{% endif %}</td></tr>
-      <tr><th>Actualiza con</th><td>{{ 'git' if sistema.get('modo_actualizacion') == 'git' else 'descarga directa desde GitHub (no necesita git)' }}</td></tr>
+      <tr><th>Actualiza con</th><td>Descarga directa desde GitHub (no necesita git). Compara archivo por archivo y guarda copia de lo que reemplaza.</td></tr>
       <tr><th>Automático</th><td>{% if sistema.get('auto_actualizar') %}Busca y aplica cambios cada {{ sistema.get('intervalo_minutos', 30) }} min{% else %}Solo avisa (AUTO_ACTUALIZAR=0){% endif %}</td></tr>
     </tbody>
   </table>
@@ -74,7 +74,23 @@
       <button class="boton secundario">Reiniciar</button>
     </form>
   </div>
-  <p class="nota">Antes de cada actualización se guarda una copia de los datos en <code>instance\respaldos</code>.</p>
+  {% if sistema.get('novedades') %}
+  <details style="margin-top:.75rem" {{ 'open' if sistema.get('actualizacion') in ('disponible', 'aplicada') }}>
+    <summary><strong>Novedades</strong></summary>
+    <ul class="novedades">
+      {% for n in sistema.novedades %}<li><span class="nota">{{ n.fecha }}</span> {{ n.mensaje }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% if sistema.get('puede_volver') %}
+  <form method="post" action="{{ url_for('sistema_accion', accion='volver') }}" style="margin-top:.75rem"
+        onsubmit="return confirm('¿Volver a la versión anterior a la última actualización? Tus datos no se tocan.')">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="enlace">↶ Volver a la versión anterior</button>
+  </form>
+  {% endif %}
+  <p class="nota">Antes de cada actualización se guarda una copia de los datos en <code>instance\respaldos</code> y de los
+    archivos del programa que se reemplazan en <code>instance\respaldos_programa</code> (las últimas 3).</p>
 </section>
 {% endif %}
 {% endblock %}

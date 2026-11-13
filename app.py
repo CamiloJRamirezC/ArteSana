@@ -159,7 +159,7 @@ def registrar_rutas(app):
 
     @app.post("/sistema/<accion>")
     def sistema_accion(accion):
-        if accion not in ("actualizar", "reiniciar") or not app.config["SERVICIO_CONTROL"]:
+        if accion not in ("actualizar", "reiniciar", "volver") or not app.config["SERVICIO_CONTROL"]:
             abort(404)
         estado = estado_servicio() or {}
         control = Path(app.config["SERVICIO_CONTROL"])

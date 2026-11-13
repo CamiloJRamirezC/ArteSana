@@ -8,6 +8,8 @@ Uso:
     python servicio.py detener
     python servicio.py reiniciar
     python servicio.py actualizar          busca en GitHub y aplica los cambios
+    python servicio.py volver              vuelve a la versión anterior a la última actualización
+    python servicio.py consola             corre la app en la ventana, para ver errores
     python servicio.py estado [--breve]
     python servicio.py abrir               abre la app en el navegador
     python servicio.py log                 muestra el registro
@@ -148,6 +150,41 @@ def guardar_en_env(clave, valor):
     ENV_FILE.write_text("\n".join(lineas) + "\n", encoding="utf-8")
 
 
+_MARCA_APP = "--app-id".encode("utf-16-le")
+
+
+def buscar_app_instalada():
+    """Acceso directo que crean Chrome o Edge al instalar ArteSana como app (desde el navegador)."""
+    if not ES_WINDOWS or not os.environ.get("APPDATA"):
+        return None
+    programas = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    if not programas.exists():
+        return None
+    inicio = programas / "Startup"
+    for ruta in programas.rglob("*.lnk"):
+        if inicio in ruta.parents or not ruta.stem.lower().startswith("artesana"):
+            continue
+        try:
+            if _MARCA_APP in ruta.read_bytes():   # nuestros propios accesos directos no lo tienen
+                return ruta
+        except OSError:
+            continue
+    return None
+
+
+def abrir_app(url=None):
+    """Abre la ventana de la app instalada; si no está instalada, el navegador."""
+    url = url or url_app()
+    acceso = buscar_app_instalada()
+    if acceso:
+        try:
+            os.startfile(str(acceso))
+            return
+        except OSError as e:
+            log(f"No se pudo abrir la app instalada ({e}); se usa el navegador")
+    webbrowser.open(url)
+
+
 def clave_secreta():
     archivo = INST / "secret_key"
     if not archivo.exists():
@@ -259,55 +296,40 @@ def enviar_orden(accion):
     (CONTROL / accion).write_text(ahora(), encoding="utf-8")
 
 
-# ------------------------------------------------------------------ git
+# ------------------------------------------------------------------ actualizaciones (sin git)
 
-def buscar_git():
-    """Ruta a git.exe: en el PATH o donde lo dejan el instalador de Git y GitHub Desktop."""
-    exe = shutil.which("git")
-    if exe:
-        return exe
-    if ES_WINDOWS:
-        candidatos = []
-        for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
-            if os.environ.get(var):
-                candidatos.append(Path(os.environ[var]) / "Git" / "cmd" / "git.exe")
-        if os.environ.get("LOCALAPPDATA"):
-            local = Path(os.environ["LOCALAPPDATA"])
-            candidatos.append(local / "Programs" / "Git" / "cmd" / "git.exe")
-            candidatos += sorted(local.glob("GitHubDesktop/app-*/resources/app/git/cmd/git.exe"), reverse=True)
-        for c in candidatos:
-            if c.exists():
-                return str(c)
-    return None
+VERSION = INST / "version.json"   # qué versión de GitHub está instalada
 
 
-def modo_actualizacion():
-    """'git' si la carpeta es un clon y hay git; si no, 'zip' (descarga directa de GitHub)."""
-    return "git" if (RAIZ / ".git").exists() and buscar_git() else "zip"
-
-
-def git(*args, timeout=60):
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"   # nunca quedarse esperando una contraseña
-    exe = buscar_git() or "git"
+def leer_version():
     try:
-        r = subprocess.run([exe, *args], cwd=RAIZ, capture_output=True, text=True,
-                           timeout=timeout, env=env, creationflags=SIN_VENTANA,
-                           encoding="utf-8", errors="replace")
-        return r.returncode, (r.stdout or "").strip() + ("\n" + r.stderr.strip() if r.returncode and r.stderr else "")
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return 1, str(e)
+        return json.loads(VERSION.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def guardar_version(sha, mensaje="", fecha_iso=""):
+    INST.mkdir(parents=True, exist_ok=True)
+    VERSION.write_text(json.dumps({"sha": sha, "mensaje": mensaje, "fecha": _fecha_local(fecha_iso),
+                                   "instalado": ahora()}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _fecha_local(iso):
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return ""
 
 
 def version_actual():
-    if modo_actualizacion() == "zip":
-        v = leer_version_zip()
-        return {"commit": (v.get("sha") or "")[:7], "fecha": v.get("fecha", ""),
-                "mensaje": v.get("mensaje", "") if v.get("sha") else "Versión sin identificar: se completa en la próxima actualización"}
-    _, commit = git("rev-parse", "--short", "HEAD")
-    _, fecha = git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M")
-    _, mensaje = git("log", "-1", "--format=%s")
-    return {"commit": commit, "fecha": fecha, "mensaje": mensaje}
+    v = leer_version()
+    if not v.get("sha"):
+        return {"commit": "", "fecha": "", "mensaje": "Se identifica en la próxima revisión de GitHub"}
+    return {"commit": v["sha"][:7], "fecha": v.get("fecha", ""), "mensaje": v.get("mensaje", "")}
+
+
+def modo_actualizacion():
+    return "github"   # siempre igual: descarga directa, con o sin git instalado
 
 
 def respaldar_bd():
@@ -332,191 +354,72 @@ def instalar_dependencias():
     return code.returncode == 0
 
 
+def puede_volver():
+    import actualizador
+    return bool(actualizador.list_backups(INST))
+
+
+def _novedades(commits):
+    return [{"sha": c["sha"], "mensaje": c["message"], "fecha": _fecha_local(c.get("date") or "")} for c in commits][:15]
+
+
 def revisar(aplicar, cfg):
-    """Busca cambios en GitHub y, si aplicar=True, los baja."""
+    """Compara los archivos con GitHub y, si aplicar=True, baja los que cambiaron."""
+    import actualizador
     res = {"ultima_revision": ahora(), "pendientes": 0, "cambios": [], "aplicada": False,
-           "modo_actualizacion": modo_actualizacion()}
-    if res["modo_actualizacion"] == "zip":
-        return revisar_zip(aplicar, cfg, res)
-    rama = cfg["RAMA"]
-    code, salida = git("fetch", "--quiet", "origin", rama, timeout=120)
-    if code:
-        log("git fetch falló: " + salida[-400:])
-        return {**res, "actualizacion": "error",
-                "mensaje_actualizacion": "No se pudo conectar con GitHub (¿hay internet?)"}
-    if VERSION_ZIP.exists():
-        # Antes se actualizaba por descarga directa y ahora hay git: alinear git con esos archivos
-        anterior = leer_version_zip().get("sha")
-        if anterior and git("cat-file", "-e", anterior + "^{commit}")[0] == 0:
-            git("reset", "--mixed", "--quiet", anterior)
-            log(f"Se pasó de descarga directa a git (versión {anterior[:7]})")
-        VERSION_ZIP.unlink(missing_ok=True)
-    _, local = git("rev-parse", "HEAD")
-    _, remoto = git("rev-parse", f"origin/{rama}")
-    _, cuenta = git("rev-list", "--count", f"HEAD..origin/{rama}")
-    pendientes = int(cuenta) if cuenta.isdigit() else 0
-    res["pendientes"] = pendientes
-    if local == remoto or pendientes == 0:
-        return {**res, "actualizacion": "al_dia", "mensaje_actualizacion": "Al día con GitHub"}
-    if not aplicar:
-        return {**res, "actualizacion": "disponible",
-                "mensaje_actualizacion": f"Hay {pendientes} cambio(s) nuevo(s) en GitHub"}
-    _, modificados = git("status", "--porcelain", "--untracked-files=no")
-    if modificados.strip():
-        return {**res, "actualizacion": "cambios_locales",
-                "mensaje_actualizacion": "Hay archivos modificados en esta computadora; no se actualiza para no pisarlos"}
-    _, archivos = git("diff", "--name-only", "HEAD", f"origin/{rama}")
-    cambios = [a for a in archivos.splitlines() if a.strip()]
-    respaldo = respaldar_bd()
-    code, salida = git("merge", "--ff-only", f"origin/{rama}")
-    if code:
-        log("git merge falló: " + salida[-400:])
-        return {**res, "actualizacion": "error",
-                "mensaje_actualizacion": "No se pudo aplicar la actualización (mirá el registro)"}
-    if "requirements.txt" in cambios:
-        instalar_dependencias()
-    log(f"Actualizado {local[:7]} -> {remoto[:7]} ({pendientes} cambio(s)); respaldo: {respaldo}")
-    return {**res, "actualizacion": "aplicada", "cambios": cambios, "aplicada": True,
-            "mensaje_actualizacion": f"Actualizado: {pendientes} cambio(s) aplicados"}
-
-
-# ------------------------------------------------------------------ actualización sin git
-
-VERSION_ZIP = INST / "version.json"
-PROTEGIDOS = {"instance", ".venv", "venv", ".git", "artesana.env", "__pycache__", ".pytest_cache"}
-
-
-def _protegido(rel):
-    partes = rel.replace("\\", "/").split("/")
-    return partes[0] in PROTEGIDOS or "__pycache__" in partes
-
-
-def _sha256(datos):
-    import hashlib
-    return hashlib.sha256(datos).hexdigest()
-
-
-def leer_version_zip():
+           "modo_actualizacion": "github", "novedades": []}
+    repo, rama, token = cfg["REPOSITORIO"], cfg["RAMA"], cfg.get("GITHUB_TOKEN") or None
+    instalado = leer_version().get("sha")
     try:
-        return json.loads(VERSION_ZIP.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def _github(url, cfg):
-    cabeceras = {"User-Agent": "ArteSana-actualizador", "Accept": "application/vnd.github+json"}
-    if cfg.get("GITHUB_TOKEN"):
-        cabeceras["Authorization"] = f"Bearer {cfg['GITHUB_TOKEN']}"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=cabeceras), timeout=120) as r:
-        return r.read()
-
-
-def _fecha_local(iso):
-    try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
-    except (ValueError, AttributeError):
-        return ""
-
-
-def revisar_zip(aplicar, cfg, res):
-    """Actualiza descargando el ZIP del repositorio: no necesita git."""
-    import io
-    import urllib.error
-    import zipfile
-
-    api = os.environ.get("ARTESANA_GITHUB_API", "https://api.github.com")
-    descargas = os.environ.get("ARTESANA_GITHUB_ZIP", "https://codeload.github.com")
-    repo, rama = cfg["REPOSITORIO"], cfg["RAMA"]
-    try:
-        datos = json.loads(_github(f"{api}/repos/{repo}/commits/{rama}", cfg))
-        sha = datos["sha"]
-        fecha = _fecha_local(datos["commit"]["committer"]["date"])
-        mensaje = datos["commit"]["message"].splitlines()[0]
-    except urllib.error.HTTPError as e:
-        log(f"GitHub respondió {e.code} al consultar {repo}")
-        texto = {404: f"No se encontró el repositorio {repo} (si es privado, cargá GITHUB_TOKEN en artesana.env)",
-                 403: "GitHub limitó las consultas por un rato; se vuelve a intentar más tarde"}.get(
-            e.code, f"GitHub respondió con error {e.code}")
-        return {**res, "actualizacion": "error", "mensaje_actualizacion": texto}
+        if not aplicar:
+            st = actualizador.status(RAIZ, repo, rama, token, instalado)
+            if st["upToDate"]:
+                if instalado != st["latest"]["sha"]:   # los archivos ya son esa versión
+                    guardar_version(st["latest"]["sha"], st["latest"]["message"], st["latest"]["date"] or "")
+                return {**res, "actualizacion": "al_dia", "mensaje_actualizacion": "Al día con GitHub"}
+            return {**res, "actualizacion": "disponible", "pendientes": len(st["changed"]),
+                    "novedades": _novedades(st["commits"]),
+                    "mensaje_actualizacion": f"Hay una versión nueva en GitHub ({len(st['changed'])} archivo(s))"}
+        respaldo = None
+        st = actualizador.status(RAIZ, repo, rama, token, instalado)
+        if not st["upToDate"]:
+            respaldo = respaldar_bd()
+        r = actualizador.apply(RAIZ, INST, repo, rama, token, instalado)
+    except actualizador.UpdateError as e:
+        log(f"Actualización: {e}")
+        return {**res, "actualizacion": "error", "mensaje_actualizacion": str(e)}
     except Exception as e:
-        log(f"No se pudo consultar GitHub: {e!r}")
-        return {**res, "actualizacion": "error",
-                "mensaje_actualizacion": "No se pudo conectar con GitHub (¿hay internet?)"}
-
-    actual = leer_version_zip()
-    if actual.get("sha") == sha:
+        log(f"Actualización falló: {e!r}")
+        return {**res, "actualizacion": "error", "mensaje_actualizacion": "No se pudo actualizar (mirá el registro)"}
+    guardar_version(r["sha"], r.get("message", ""), r.get("date") or "")
+    if not r["updated"]:
         return {**res, "actualizacion": "al_dia", "mensaje_actualizacion": "Al día con GitHub"}
-    res["pendientes"] = 1
-    if not aplicar:
-        return {**res, "actualizacion": "disponible",
-                "mensaje_actualizacion": f"Hay una versión nueva en GitHub ({fecha}: {mensaje})"}
-
-    # No pisar archivos que se modificaron a mano después de la última actualización
-    modificados = [rel for rel, h in actual.get("archivos", {}).items()
-                   if (RAIZ / rel).exists() and _sha256((RAIZ / rel).read_bytes()) != h]
-    if modificados:
-        log("No se actualiza; archivos modificados a mano: " + ", ".join(modificados[:10]))
-        return {**res, "actualizacion": "cambios_locales",
-                "mensaje_actualizacion": "Hay archivos modificados en esta computadora (" +
-                                         ", ".join(modificados[:3]) + "); no se actualiza para no pisarlos"}
-
-    try:
-        contenido_zip = _github(f"{descargas}/{repo}/zip/{sha}", cfg)
-        paquete = zipfile.ZipFile(io.BytesIO(contenido_zip))
-        nuevos = {}
-        for info in paquete.infolist():
-            if info.is_dir() or "/" not in info.filename:
-                continue
-            rel = info.filename.split("/", 1)[1]
-            if rel and not _protegido(rel):
-                nuevos[rel] = paquete.read(info)
-    except Exception as e:
-        log(f"No se pudo descargar la actualización: {e!r}")
-        return {**res, "actualizacion": "error",
-                "mensaje_actualizacion": "No se pudo descargar la actualización (¿hay internet?)"}
-    if "servicio.py" not in nuevos or "app.py" not in nuevos:
-        log("El ZIP descargado no parece ser ArteSana; no se aplica")
-        return {**res, "actualizacion": "error", "mensaje_actualizacion": "La descarga no es válida; no se aplicó"}
-
-    respaldo = respaldar_bd()
-    cambios, fallidos, registro = [], [], {}
-    for rel, datos_archivo in nuevos.items():
-        destino = RAIZ / rel
-        registro[rel] = _sha256(datos_archivo)
-        try:
-            if destino.exists() and destino.read_bytes() == datos_archivo:
-                continue
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            temporal = destino.with_name(destino.name + ".nuevo")
-            temporal.write_bytes(datos_archivo)
-            os.replace(temporal, destino)
-            cambios.append(rel)
-        except OSError as e:  # ej. la planilla abierta en Excel
-            fallidos.append(rel)
-            registro[rel] = actual.get("archivos", {}).get(rel, "")
-            log(f"No se pudo reemplazar {rel}: {e}")
-    for rel in actual.get("archivos", {}):
-        if rel not in nuevos and (RAIZ / rel).exists():
-            try:
-                (RAIZ / rel).unlink()
-                cambios.append(rel)
-            except OSError:
-                pass
-
-    INST.mkdir(parents=True, exist_ok=True)
-    VERSION_ZIP.write_text(json.dumps({
-        # Si algo no se pudo copiar, se guarda la versión anterior para reintentar en la próxima revisión
-        "sha": actual.get("sha", "") if fallidos else sha,
-        "fecha": fecha, "mensaje": mensaje, "instalado": ahora(), "archivos": registro,
-    }, ensure_ascii=False, indent=1), encoding="utf-8")
-    if "requirements.txt" in cambios:
+    if r["requirementsChanged"]:
         instalar_dependencias()
-    log(f"Actualizado (descarga directa) a {sha[:7]} - {mensaje}; {len(cambios)} archivo(s); respaldo: {respaldo}")
-    texto = f"Actualizado a la versión del {fecha}"
-    if fallidos:
-        texto += f" (faltó: {', '.join(fallidos[:3])}; se reintenta en la próxima revisión)"
-    return {**res, "actualizacion": "aplicada", "cambios": cambios, "aplicada": True,
-            "mensaje_actualizacion": texto}
+    log(f"Actualizado a {r['sha'][:7]} ({len(r['updated'])} archivo(s): {', '.join(r['updated'][:12])}); "
+        f"copia del programa: {r['backup']}; respaldo de datos: {respaldo}")
+    return {**res, "actualizacion": "aplicada", "cambios": r["updated"], "aplicada": True,
+            "pendientes": len(r["updated"]), "novedades": _novedades(st.get("commits", [])),
+            "mensaje_actualizacion": f"Actualizado: {len(r['updated'])} archivo(s) nuevo(s)"}
+
+
+def volver_version_anterior():
+    """Restaura la última copia del programa guardada antes de una actualización."""
+    import actualizador
+    try:
+        r = actualizador.rollback(RAIZ, INST)
+    except actualizador.UpdateError as e:
+        return {"actualizacion": "error", "mensaje_actualizacion": str(e), "ultima_revision": ahora(),
+                "aplicada": False, "cambios": []}
+    if r.get("sha"):
+        guardar_version(r["sha"], "Versión anterior restaurada")
+    else:
+        VERSION.unlink(missing_ok=True)
+    if r["requirementsChanged"]:
+        instalar_dependencias()
+    log(f"Vuelta a la versión anterior ({len(r['restored'])} archivo(s))")
+    return {"actualizacion": "restaurada", "ultima_revision": ahora(), "aplicada": True, "cambios": r["restored"],
+            "mensaje_actualizacion": f"Se volvió a la versión anterior ({len(r['restored'])} archivo(s))"}
 
 
 # ------------------------------------------------------------------ supervisor
@@ -599,14 +502,12 @@ class Supervisor:
         self.lanzar_app()
 
     def procesar_revision(self, res):
-        self.guardar(forzar=True, **{k: v for k, v in res.items() if k != "aplicada"})
+        self.guardar(forzar=True, puede_volver=puede_volver(), **{k: v for k, v in res.items() if k != "aplicada"})
         if not res.get("aplicada"):
             return "seguir"
-        if "servicio.py" in res.get("cambios", []):
-            log("Cambió servicio.py: se relanza el servicio completo")
-            return "relanzar"
-        self.reiniciar_app("actualización aplicada")
-        return "seguir"
+        # Con archivos nuevos se relanza todo (servicio y web) para que no quede código viejo en memoria
+        log("Archivos nuevos: se relanza el servicio completo")
+        return "relanzar"
 
     def correr(self):
         INST.mkdir(parents=True, exist_ok=True)
@@ -625,11 +526,18 @@ class Supervisor:
             "auto_actualizar": cfg["AUTO_ACTUALIZAR"] == "1",
             "intervalo_minutos": int(cfg["INTERVALO_MINUTOS"] or 30),
             "modo_actualizacion": modo_actualizacion(),
-            # No se arrastra el mensaje anterior: puede venir de una versión vieja del servicio
+            "puede_volver": puede_volver(),
+            # No se arrastra el mensaje anterior (puede venir de una versión vieja del servicio),
+            # salvo el aviso de una actualización recién aplicada, para que se vea
             "ultima_revision": anterior.get("ultima_revision", ""),
             "actualizacion": "pendiente",
             "mensaje_actualizacion": "Se revisa GitHub en unos segundos…",
+            "novedades": [],
         }
+        if anterior.get("actualizacion") in ("aplicada", "restaurada"):
+            for clave in ("actualizacion", "mensaje_actualizacion", "novedades", "cambios"):
+                if clave in anterior:
+                    self.estado[clave] = anterior[clave]
         # Si alguien reemplaza servicio.py en disco (actualización manual), el servicio se relanza solo
         archivo_servicio = RAIZ / "servicio.py"
         firma_servicio = archivo_servicio.stat().st_mtime if archivo_servicio.exists() else 0
@@ -657,6 +565,13 @@ class Supervisor:
                         salida = "relanzar"
                         break
                     proxima_revision = time.time() + int(cfg["INTERVALO_MINUTOS"] or 30) * 60
+                elif "volver" in ordenes:
+                    log("Orden recibida: volver a la versión anterior")
+                    self.guardar(forzar=True, actualizacion="buscando",
+                                 mensaje_actualizacion="Volviendo a la versión anterior…")
+                    if self.procesar_revision(volver_version_anterior()) == "relanzar":
+                        salida = "relanzar"
+                        break
                 elif "reiniciar" in ordenes:
                     # Se relanza el servicio completo (no solo la web) para cargar cualquier código nuevo
                     log("Orden recibida: reiniciar (servicio completo)")
@@ -757,7 +672,7 @@ def cmd_iniciar(abrir=False):
             return 1
         decir(f"Listo: {url_app(cfg)}")
     if abrir:
-        webbrowser.open(url_app(cfg))
+        abrir_app(url_app(cfg))
     return 0
 
 
@@ -818,6 +733,46 @@ def cmd_actualizar():
     return 0
 
 
+def cmd_volver():
+    corriendo, _ = servicio_corriendo()
+    if not puede_volver():
+        decir("No hay una versión anterior guardada.")
+        return 1
+    if not corriendo:
+        res = volver_version_anterior()
+        estado = leer_estado()
+        estado.update({k: v for k, v in res.items() if k != "aplicada"})
+        escribir_estado(estado)
+        decir(res["mensaje_actualizacion"])
+        return 0 if res["actualizacion"] == "restaurada" else 1
+    cfg = leer_config()
+    previo = leer_estado().get("servidor_iniciado")
+    decir("Volviendo a la versión anterior")
+    enviar_orden("volver")
+    esperar(lambda: leer_estado().get("servidor_iniciado") != previo and app_responde(cfg, 2), 120)
+    decir(leer_estado().get("mensaje_actualizacion", ""))
+    return 0
+
+
+def cmd_consola():
+    """Corre la app en esta ventana (sin segundo plano) para ver los errores."""
+    cmd_configurar()
+    if servicio_corriendo()[0]:
+        decir("ArteSana está corriendo en segundo plano: primero detenela (artesana.bat detener).")
+        return 1
+    cfg = leer_config()
+    env = os.environ.copy()
+    env.update({"PORT": cfg["PUERTO"], "HOST": cfg["HOST"], "APP_PASSWORD": cfg["APP_PASSWORD"],
+                "SECRET_KEY": clave_secreta(), "PYTHONUNBUFFERED": "1"})
+    if cfg["DATABASE_URL"]:
+        env["DATABASE_URL"] = cfg["DATABASE_URL"]
+    decir(f"ArteSana en {url_app(cfg)} (cerrá esta ventana o Ctrl+C para detenerla)")
+    try:
+        return subprocess.call([python_consola(), str(RAIZ / "servidor.py")], cwd=RAIZ, env=env)
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_estado(breve=False):
     corriendo, pid = servicio_corriendo()
     estado = leer_estado()
@@ -841,8 +796,9 @@ def cmd_estado(breve=False):
     decir(f"  Actualización automática: {'sí' if cfg['AUTO_ACTUALIZAR'] == '1' else 'no'}, "
           f"cada {cfg['INTERVALO_MINUTOS']} min, rama {cfg['RAMA']}")
     decir(f"  Visible en: {'solo esta computadora' if es_local(cfg['HOST']) else 'la red local'}")
-    modo = modo_actualizacion()
-    decir(f"  Actualiza con: {'git (' + (buscar_git() or '') + ')' if modo == 'git' else 'descarga directa desde GitHub (no necesita git)'}")
+    decir("  Actualiza con: descarga directa desde GitHub (no necesita git)")
+    if puede_volver():
+        decir("  Hay una copia de la versión anterior: se puede volver atrás")
     decir(f"  Contraseña: {'sí' if cfg['APP_PASSWORD'] else 'no'}")
     if corriendo:
         decir(f"  Proceso del servicio: {pid} · iniciado {estado.get('iniciado', '')}")
@@ -1107,12 +1063,14 @@ def main(argv):
         "reiniciar": cmd_reiniciar,
         "actualizar": cmd_actualizar,
         "estado": lambda: cmd_estado(breve="--breve" in opciones),
-        "abrir": lambda: (webbrowser.open(url_app()), 0)[1],
+        "abrir": lambda: (abrir_app(), 0)[1],
         "log": cmd_log,
         "autoinicio": cmd_autoinicio,
         "configurar": cmd_configurar,
         "red": cmd_red,
         "accesos": cmd_accesos,
+        "volver": cmd_volver,
+        "consola": cmd_consola,
     }
     if cmd not in comandos:
         decir(f"Comando desconocido: {cmd}\n{__doc__}")

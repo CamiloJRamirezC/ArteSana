@@ -164,3 +164,5 @@ tr.atenuado td { opacity: .55; }
 .barato { color: var(--ok); font-weight: 600; font-size: .9rem; }
 .dato.alerta-margen { border-color: var(--error); background: #fdecea; }
 @media (max-width: 640px) { .tabla-precios input { width: 5.2rem; } }
+.novedades { margin: .4rem 0 0; padding-left: 1.1rem; font-size: .9rem; }
+.novedades li { margin-bottom: .2rem; }
