@@ -214,17 +214,61 @@ def registrar_rutas(app):
             subrecetas=[f for f in filas if f["tipo"] == "subreceta"],
             vacio=not ingredientes and not recetas,
             redondeo=redondeo,
+            margen_minimo=_margen_minimo(),
         )
+
+    def _margen_minimo():
+        return (parse_num(db.obtener_config("margen_minimo", "60"), 60) or 0) / 100
+
+    @app.post("/productos/precios")
+    def productos_precios():
+        """Guarda los precios de venta y de mercado editados en la tabla. Todo o nada."""
+        recetas = {r["id"]: r for r in db.consultar("SELECT * FROM recetas WHERE tipo = 'venta'")}
+        datos = request.get_json(silent=True) or {}
+        hoy = date.today().isoformat()
+        errores, cambios = [], []
+        for it in datos.get("items", []):
+            rid = it.get("id")
+            r = recetas.get(rid)
+            if not r:
+                errores.append({"id": rid, "campo": "precio_venta", "mensaje": "Ese producto ya no existe"})
+                continue
+            valores = {}
+            for campo in ("precio_venta", "precio_mercado"):
+                texto = str(it.get(campo) or "").strip()
+                try:
+                    valor = parse_num(texto) if texto else None
+                except ValueError as e:
+                    errores.append({"id": rid, "campo": campo, "mensaje": str(e)})
+                    break
+                if valor is not None and valor < 0:
+                    errores.append({"id": rid, "campo": campo, "mensaje": "No puede ser negativo"})
+                    break
+                valores[campo] = valor or None
+            else:
+                fecha = r.get("mercado_fecha")
+                if valores["precio_mercado"] != r.get("precio_mercado"):
+                    fecha = hoy if valores["precio_mercado"] else None
+                cambios.append((valores["precio_venta"], valores["precio_mercado"], fecha, rid))
+        if errores:
+            return jsonify({"ok": False, "errores": errores}), 400
+        with db.lote():
+            for cambio in cambios:
+                db.ejecutar("UPDATE recetas SET precio_venta_real=?, precio_mercado=?, mercado_fecha=? WHERE id=?", cambio)
+        flash(f"Precios guardados: {len(cambios)} producto(s)", "ok")
+        return jsonify({"ok": True, "guardados": len(cambios)})
 
     @app.route("/recetas/nueva", methods=["GET", "POST"])
     def receta_nueva():
         if request.method == "POST":
             try:
                 datos = _form_receta()
-                rid = db.ejecutar(
-                    "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, "
-                    "precio_venta_real, notas) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    datos, devolver_id=True)
+                with db.lote():
+                    rid = db.ejecutar(
+                        "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, "
+                        "precio_venta_real, notas) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        datos, devolver_id=True)
+                    _guardar_mercado(rid)
                 flash("Receta creada. Ahora cargá sus ingredientes.", "ok")
                 return redirect(url_for("receta", rid=rid))
             except ValueError as e:
@@ -233,6 +277,19 @@ def registrar_rutas(app):
                 flash("Ya existe una receta con ese nombre", "error")
         tipo = request.args.get("tipo", "venta")
         return render_template("receta_form.html", receta=None, tipo=tipo, form=request.form)
+
+    def _guardar_mercado(rid, anterior=None):
+        """Precio de mercado y su referencia, desde el formulario de receta."""
+        if request.form.get("tipo", "venta") != "venta":
+            db.ejecutar("UPDATE recetas SET precio_mercado=NULL, mercado_ref=NULL, mercado_fecha=NULL WHERE id=?", (rid,))
+            return
+        mercado = _num("precio_mercado", obligatorio=False, minimo=0) or None
+        ref = _texto("mercado_ref", False) or None
+        fecha = (anterior or {}).get("mercado_fecha")
+        if mercado != (anterior or {}).get("precio_mercado"):
+            fecha = date.today().isoformat() if mercado else None
+        db.ejecutar("UPDATE recetas SET precio_mercado=?, mercado_ref=?, mercado_fecha=? WHERE id=?",
+                    (mercado, ref, fecha, rid))
 
     def _form_receta():
         tipo = request.form.get("tipo", "venta")
@@ -272,6 +329,7 @@ def registrar_rutas(app):
             usado_en=_usos_receta(rid, recetas, items),
             unidad_base=costeo.unidad_base,
             componentes=componentes,
+            margen_minimo=_margen_minimo(),
             lineas_grilla=[{"nombre": ln["nombre"], "cantidad": ln["cantidad"]}
                            for ln in calculo["recetas"][rid]["lineas"]],
             redondeo=redondeo,
@@ -290,9 +348,11 @@ def registrar_rutas(app):
                     usos = _usos_receta(rid, recetas, items)
                     if usos:
                         raise ValueError("No se puede pasar a Venta: se usa como subreceta en " + ", ".join(usos))
-                db.ejecutar(
-                    "UPDATE recetas SET nombre=?, tipo=?, rinde=?, unidad_rinde=?, multiplicador=?, "
-                    "precio_venta_real=?, notas=? WHERE id=?", datos + (rid,))
+                with db.lote():
+                    db.ejecutar(
+                        "UPDATE recetas SET nombre=?, tipo=?, rinde=?, unidad_rinde=?, multiplicador=?, "
+                        "precio_venta_real=?, notas=? WHERE id=?", datos + (rid,))
+                    _guardar_mercado(rid, r)
                 flash("Receta guardada", "ok")
                 return redirect(url_for("receta", rid=rid))
             except ValueError as e:
@@ -325,10 +385,11 @@ def registrar_rutas(app):
         while db.consultar_uno("SELECT id FROM recetas WHERE nombre = ?", (nombre,)):
             nombre, n = f"{r['nombre']} (copia {n})", n + 1
         nuevo = db.ejecutar(
-            "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, precio_venta_real, notas) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, precio_venta_real, notas, "
+            "precio_mercado, mercado_ref, mercado_fecha) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (nombre, r["tipo"], r["rinde"], r["unidad_rinde"], r["multiplicador"],
-             r["precio_venta_real"], r["notas"]), devolver_id=True)
+             r["precio_venta_real"], r["notas"], r.get("precio_mercado"), r.get("mercado_ref"),
+             r.get("mercado_fecha")), devolver_id=True)
         for it in db.consultar("SELECT * FROM receta_items WHERE receta_id = ? ORDER BY orden, id", (rid,)):
             db.ejecutar(
                 "INSERT INTO receta_items (receta_id, ingrediente_id, subreceta_id, cantidad, orden) "
@@ -862,13 +923,18 @@ def registrar_rutas(app):
         if request.method == "POST":
             try:
                 redondeo = _num("redondeo", minimo=1)
+                margen = _num("margen_minimo", obligatorio=False, minimo=0)
+                if margen is not None and margen >= 100:
+                    raise ValueError("El margen mínimo tiene que ser menor a 100 %")
                 db.guardar_config("redondeo", int(redondeo))
+                if margen is not None:
+                    db.guardar_config("margen_minimo", margen)
                 flash("Configuración guardada", "ok")
                 return redirect(url_for("productos"))
             except ValueError as e:
                 flash(str(e), "error")
         return render_template("configuracion.html", redondeo=db.obtener_config("redondeo", "100"),
-                               sistema=estado_servicio())
+                               margen_minimo=cant(_margen_minimo() * 100), sistema=estado_servicio())
 
     @app.post("/ejemplo")
     def cargar_ejemplo():

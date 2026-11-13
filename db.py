@@ -188,6 +188,11 @@ COLUMNAS_NUEVAS = {
         ("fuente_oferta", "DOUBLE PRECISION"),   # oferta vigente en esa consulta, si había
         ("fuente_fecha", "TEXT"),
     ],
+    "recetas": [
+        ("precio_mercado", "DOUBLE PRECISION"),  # lo que cobran otros por algo parecido
+        ("mercado_ref", "TEXT"),                 # de dónde salió (ej. "Confitería X")
+        ("mercado_fecha", "TEXT"),
+    ],
 }
 
 

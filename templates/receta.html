@@ -22,10 +22,17 @@
   {% if receta.tipo == 'venta' %}
   <div class="dato"><span>Costo por {{ receta.unidad_rinde }}</span><strong>{{ res.costo_unitario|gs }} Gs</strong></div>
   <div class="dato destacado"><span>Precio de venta</span><strong>{{ res.precio_venta|gs }} Gs</strong>
-    <small>{% if receta.precio_venta_real %}Precio real cargado · sugerido {{ res.precio_sugerido_redondeado|gs }}
-           {% else %}{{ res.costo_unitario|gs }} × {{ receta.multiplicador|cant }}, redondeado a {{ redondeo|gs }}{% endif %}</small></div>
-  <div class="dato"><span>Ganancia bruta por {{ receta.unidad_rinde }}</span><strong>{{ res.ganancia|gs }} Gs</strong>
-    <small>Ingredientes = {{ res.porcentaje_ingredientes|pct }} del precio{% if receta.precio_venta_real and res.multiplicador_efectivo %} · equivale a ×{{ res.multiplicador_efectivo|cant }}{% endif %}</small></div>
+    <small>{% if receta.precio_venta_real %}Cargado por vos · sugerido {{ res.precio_sugerido_redondeado|gs }}
+           {% else %}Sugerido: {{ res.costo_unitario|gs }} × {{ receta.multiplicador|cant }}, redondeado a {{ redondeo|gs }}{% endif %}</small></div>
+  <div class="dato {{ 'alerta-margen' if res.margen is not none and res.margen < margen_minimo }}"><span>Margen bruto</span>
+    <strong class="{{ 'margen-bajo' if res.margen is not none and res.margen < margen_minimo else 'margen-ok' }}">{{ res.margen|pct }}</strong>
+    <small>Ganancia {{ res.ganancia|gs }} Gs por {{ receta.unidad_rinde }}{{ ' (sobre el sugerido)' if res.usa_sugerido }}
+      · mínimo {{ (margen_minimo * 100)|cant }} %{% if res.multiplicador_efectivo %} · ×{{ res.multiplicador_efectivo|round(2)|cant }}{% endif %}</small></div>
+  <div class="dato"><span>Precio de mercado</span>
+    {% if res.precio_mercado %}<strong>{{ res.precio_mercado|gs }} Gs</strong>
+    <small>{% if res.vs_mercado is not none %}{% if res.vs_mercado|abs < 0.005 %}Igual al mercado{% else %}Estás {{ (res.vs_mercado|abs)|pct }} {{ 'más caro' if res.vs_mercado > 0 else 'más barato' }}{% endif %}{% endif %}
+      {% if receta.mercado_ref %} · {{ receta.mercado_ref }}{% endif %}{% if receta.mercado_fecha %} · {{ receta.mercado_fecha }}{% endif %}</small>
+    {% else %}<strong>—</strong><small><a href="{{ url_for('receta_editar', rid=receta.id) }}">Cargalo</a> para compararte</small>{% endif %}</div>
   {% else %}
   <div class="dato destacado"><span>Costo por {{ receta.unidad_rinde }}</span><strong>{{ res.costo_unitario|gs_unit }} Gs</strong>
     <small>Este valor se usa en las recetas que la llevan</small></div>

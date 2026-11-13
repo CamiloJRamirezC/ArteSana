@@ -70,7 +70,10 @@ HOJAS = {
         "rinde": lambda h: h.startswith("rinde"),
         "unidad": lambda h: h.startswith("unidad"),
         "multiplicador": lambda h: h.startswith("multiplicador"),
-        "precio_real": lambda h: "real" in h and h.startswith("precio"),
+        "precio_real": lambda h: h.startswith("precio") and ("real" in h or (
+            h.startswith("precio de venta") and "redondeado" not in h and "sugerido" not in h)),
+        "precio_mercado": lambda h: h.startswith("precio de mercado") or h == "mercado",
+        "mercado_ref": lambda h: h.startswith("referencia"),
         "notas": lambda h: h.startswith("notas"),
     },
     "recetas": {
@@ -229,6 +232,7 @@ def procesar(datos, aplicar=False):
             rinde = numero(r.get("rinde"))
             mult = numero(r.get("multiplicador"))
             real = numero(r.get("precio_real"))
+            mercado = numero(r.get("precio_mercado"))
         except ValueError as e:
             errores.append((hoja, fila, str(e)))
             continue
@@ -254,6 +258,9 @@ def procesar(datos, aplicar=False):
         mult = mult if mult is not None else (actual["multiplicador"] if actual else (3 if tipo == "venta" else 0))
         real = real if (real and tipo == "venta") else None
         notas = limpiar_nombre(r.get("notas")) or None
+        trae_mercado = "precio_mercado" in r or "mercado_ref" in r
+        mercado = mercado if (mercado and tipo == "venta") else None
+        ref = limpiar_nombre(r.get("mercado_ref")) or None
         if actual:
             if actual["tipo"] == "subreceta" and tipo == "venta" and any(
                     it["subreceta_id"] == actual["id"] for it in items):
@@ -262,7 +269,8 @@ def procesar(datos, aplicar=False):
             nuevos_valores = (nombre, tipo, rinde, u, mult, real)
             viejos = (actual["nombre"], actual["tipo"], actual["rinde"], actual["unidad_rinde"],
                       actual["multiplicador"], actual["precio_venta_real"])
-            if nuevos_valores == viejos and (notas is None or notas == actual.get("notas")):
+            cambia_mercado = trae_mercado and (mercado, ref) != (actual.get("precio_mercado"), actual.get("mercado_ref"))
+            if nuevos_valores == viejos and (notas is None or notas == actual.get("notas")) and not cambia_mercado:
                 res["rec_iguales"] += 1
                 continue
             res["rec_actualizadas"].append(nombre)
@@ -270,14 +278,22 @@ def procesar(datos, aplicar=False):
                 db.ejecutar("UPDATE recetas SET nombre=?, tipo=?, rinde=?, unidad_rinde=?, multiplicador=?, "
                             "precio_venta_real=?, notas=? WHERE id=?",
                             nuevos_valores + (notas if notas is not None else actual.get("notas"), actual["id"]))
+                if cambia_mercado:
+                    fecha = actual.get("mercado_fecha")
+                    if mercado != actual.get("precio_mercado"):
+                        fecha = hoy if mercado else None
+                    db.ejecutar("UPDATE recetas SET precio_mercado=?, mercado_ref=?, mercado_fecha=? WHERE id=?",
+                                (mercado, ref, fecha, actual["id"]))
             actual.update(nombre=nombre, tipo=tipo, rinde=rinde, unidad_rinde=u)
         else:
             res["rec_nuevas"].append(nombre)
             rid = nuevo_id()
             if aplicar:
                 rid = db.ejecutar("INSERT INTO recetas (nombre, tipo, rinde, unidad_rinde, multiplicador, "
-                                  "precio_venta_real, notas) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                  (nombre, tipo, rinde, u, mult, real, notas), devolver_id=True)
+                                  "precio_venta_real, notas, precio_mercado, mercado_ref, mercado_fecha) "
+                                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (nombre, tipo, rinde, u, mult, real, notas, mercado, ref, hoy if mercado else None),
+                                  devolver_id=True)
             recetas[clave] = {"id": rid, "nombre": nombre, "tipo": tipo, "rinde": rinde, "unidad_rinde": u}
 
     # ---------- líneas de receta (se reemplazan completas)
@@ -416,6 +432,7 @@ def exportar(vacio=False):
         ("   Unidades: g, kg, ml, l o u (unidades). En las recetas se usan en g, ml o u.", False),
         ("Productos: cada receta es UNA TANDA. Tipo = Venta o Subreceta (rellenos y bases que se usan en otras recetas).", False),
         ("   Rinde = lo que contás o pesás al terminar. Una subreceta rinde en g, ml o u. Multiplicador vacío = 3.", False),
+        ("   Precio de venta: el que cobrás (vacío = se usa el sugerido). Precio de mercado: lo que cobran otros.", False),
         ("Recetas: una fila por ingrediente de cada receta, con la cantidad en g, ml o u.", False),
         ("   Si una receta aparece en esta hoja, sus ingredientes se REEMPLAZAN por los del Excel.", False),
         ("   Las recetas que no aparecen en esta hoja quedan como están.", False),
@@ -431,9 +448,10 @@ def exportar(vacio=False):
                 [(i["nombre"], i["presentacion_cantidad"], i["presentacion_unidad"], i["precio"], i.get("notas"))
                  for i in ingredientes])
     ws_p = hoja("Productos", [("Receta", 30), ("Tipo", 12), ("Rinde", 10), ("Unidad del rinde", 16), ("Multiplicador", 14),
-                              ("Precio de venta real", 20), ("Notas", 34)],
+                              ("Precio de venta", 16), ("Notas", 34), ("Precio de mercado", 18), ("Referencia de mercado", 28)],
                 [(r["nombre"], "Venta" if r["tipo"] == "venta" else "Subreceta", r["rinde"], r["unidad_rinde"],
-                  r["multiplicador"] if r["tipo"] == "venta" else None, r["precio_venta_real"], r.get("notas"))
+                  r["multiplicador"] if r["tipo"] == "venta" else None, r["precio_venta_real"], r.get("notas"),
+                  r.get("precio_mercado"), r.get("mercado_ref"))
                  for r in recetas])
     ws_r = hoja("Recetas", [("Receta", 30), ("Ingrediente o subreceta", 30), ("Cantidad", 12)],
                 [(l["receta"], l["componente"], l["cantidad"]) for l in lineas])
@@ -443,7 +461,7 @@ def exportar(vacio=False):
         dv = DataValidation(type="list", formula1=lista, allow_blank=True)
         ws.add_data_validation(dv)
         dv.add(rango)
-    for ws, col in ((ws_i, "D"), (ws_p, "F")):
+    for ws, col in ((ws_i, "D"), (ws_p, "F"), (ws_p, "H")):
         for c in ws[col][1:]:
             c.number_format = "#,##0"
 

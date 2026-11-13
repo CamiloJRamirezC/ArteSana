@@ -29,34 +29,126 @@
 
 {% if venta %}
 <section class="tarjeta">
-  <h2>Para vender</h2>
+  <div class="encabezado" style="margin-bottom:.5rem">
+    <h2 style="margin:0">Para vender</h2>
+    <div class="acciones">
+      <span class="nota" id="estado-precios"></span>
+      <button class="boton secundario" id="descartar-precios" hidden>Descartar</button>
+      <button class="boton" id="guardar-precios" disabled>Guardar precios</button>
+    </div>
+  </div>
+  <p class="ayuda" style="margin:0 0 .5rem">Escribí tu <strong>precio de venta</strong> y el <strong>precio de mercado</strong> directo en la tabla:
+    la ganancia y el margen se recalculan mientras escribís. Si dejás el precio de venta vacío, se usa el sugerido (en gris).</p>
   <div class="tabla-scroll">
-  <table>
+  <table class="grilla tabla-precios" id="tabla-precios">
     <thead><tr>
-      <th>Producto</th><th class="num">Rinde</th><th class="num">Costo tanda</th>
-      <th class="num">Costo por unidad</th><th class="num">×</th>
-      <th class="num">Precio de venta</th><th class="num">Ganancia bruta</th><th></th>
+      <th>Producto</th><th class="num solo-ancho">Rinde (costo tanda)</th><th class="num">Costo por unidad</th>
+      <th class="num solo-ancho">Sugerido</th><th class="num">Precio de venta ✎</th>
+      <th class="num">Ganancia</th><th class="num">Margen</th>
+      <th class="num">Precio de mercado ✎</th><th></th>
     </tr></thead>
     <tbody>
     {% for p in venta %}
-      <tr>
-        <td><a href="{{ url_for('receta', rid=p.id) }}"><strong>{{ p.nombre }}</strong></a></td>
-        <td class="num">{{ p.rinde|cant }} {{ p.unidad_rinde }}</td>
-        <td class="num">{{ p.costo_tanda|gs }}</td>
+      <tr data-id="{{ p.id }}" data-costo="{{ p.costo_unitario }}" data-sugerido="{{ p.precio_sugerido_redondeado or 0 }}"
+          data-venta="{{ p.precio_venta_real or '' }}" data-mercado="{{ p.precio_mercado or '' }}">
+        <td><a href="{{ url_for('receta', rid=p.id) }}"><strong>{{ p.nombre }}</strong></a>
+          {% if p.mercado_ref %}<br><small class="nota" title="Referencia del precio de mercado">mercado: {{ p.mercado_ref }}</small>{% endif %}</td>
+        <td class="num solo-ancho">{{ p.rinde|cant }} {{ p.unidad_rinde }}<br><small class="nota" title="Costo de la tanda">{{ p.costo_tanda|gs }}</small></td>
         <td class="num">{{ p.costo_unitario|gs }}</td>
-        <td class="num">{{ p.multiplicador|cant }}</td>
-        <td class="num"><strong>{{ p.precio_venta|gs }}</strong>
-          {% if p.precio_venta_real %}<span class="etiqueta">real</span>{% endif %}</td>
-        <td class="num">{{ p.ganancia|gs }}</td>
+        <td class="num solo-ancho"><span class="nota" title="Costo × {{ p.multiplicador|cant }}, redondeado">{{ p.precio_sugerido_redondeado|gs }}</span></td>
+        <td class="num"><input class="c-venta" data-col="0" inputmode="decimal" value="{{ p.precio_venta_real|gs if p.precio_venta_real }}"
+             placeholder="{{ p.precio_sugerido_redondeado|gs }}" aria-label="Precio de venta de {{ p.nombre }}"></td>
+        <td class="num c-ganancia"></td>
+        <td class="num c-margen"></td>
+        <td class="num"><input class="c-mercado" data-col="1" inputmode="decimal" value="{{ p.precio_mercado|gs if p.precio_mercado }}"
+             placeholder="—" aria-label="Precio de mercado de {{ p.nombre }}"
+             title="{{ ('Cargado el ' ~ p.mercado_fecha) if p.mercado_fecha else 'Lo que cobran otros por algo parecido' }}">
+          <div class="c-vs"></div></td>
         <td>{% if p.alertas %}<span class="alerta" title="{{ p.alertas|join(' · ') }}">⚠ {{ p.alertas|length }}</span>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
-  <p class="nota">Montos en guaraníes, por unidad de venta. El precio se redondea hacia arriba a {{ redondeo|gs }} Gs
-    (<a href="{{ url_for('configuracion') }}">cambiar</a>). «real» = precio que cargaste a mano.</p>
+  <p class="nota">Montos en guaraníes, por unidad de venta. <strong>Margen</strong> = (precio de venta − costo) ÷ precio de venta;
+    es un margen <em>bruto</em>: descuenta ingredientes y empaque, no gas ni mano de obra. En rojo, los que quedan debajo de
+    {{ (margen_minimo * 100)|cant }} %. El sugerido es costo × multiplicador, redondeado a {{ redondeo|gs }} Gs
+    (<a href="{{ url_for('configuracion') }}">cambiar</a>).</p>
 </section>
+<script src="{{ url_for('static', filename='grilla.js') }}"></script>
+<script>
+(() => {
+  const minimo = {{ margen_minimo|tojson }};
+  const csrf = {{ csrf_token()|tojson }};
+  const tabla = document.getElementById("tabla-precios");
+  const filas = [...tabla.tBodies[0].rows];
+  const botonGuardar = document.getElementById("guardar-precios");
+  const botonDescartar = document.getElementById("descartar-precios");
+  const estado = document.getElementById("estado-precios");
+  const num = (t) => { const n = Grilla.num(t); return Number.isNaN(n) ? NaN : n; };
+  const igual = (a, b) => (a === null || a === "" ? null : Number(a)) === (b === null || b === "" ? null : Number(b));
+
+  function recalcular() {
+    let cambiadas = 0;
+    for (const tr of filas) {
+      const costo = Number(tr.dataset.costo), sugerido = Number(tr.dataset.sugerido);
+      const iv = tr.querySelector(".c-venta"), im = tr.querySelector(".c-mercado");
+      const venta = iv.value.trim() === "" ? null : num(iv.value);
+      const mercado = im.value.trim() === "" ? null : num(im.value);
+      iv.classList.toggle("invalido", venta !== null && (Number.isNaN(venta) || venta < 0));
+      im.classList.toggle("invalido", mercado !== null && (Number.isNaN(mercado) || mercado < 0));
+      const precio = venta && venta > 0 ? venta : sugerido;
+      const ganancia = precio - costo, margen = precio > 0 ? ganancia / precio : null;
+      tr.querySelector(".c-ganancia").textContent = precio > 0 ? Grilla.formato(ganancia) : "";
+      const celdaMargen = tr.querySelector(".c-margen");
+      celdaMargen.textContent = margen === null ? "" : Grilla.formato(margen * 100, 1) + " %";
+      celdaMargen.className = "num c-margen " + (margen !== null && margen < minimo ? "margen-bajo" : "margen-ok");
+      celdaMargen.title = venta ? "" : "Sobre el precio sugerido";
+      if (!venta) celdaMargen.classList.add("sobre-sugerido");
+      const vs = tr.querySelector(".c-vs");
+      if (mercado > 0 && precio > 0) {
+        const d = (precio / mercado - 1) * 100;
+        vs.innerHTML = Math.abs(d) < 0.5 ? '<span class="nota">igual que el mercado</span>'
+          : `<span class="${d > 0 ? "caro" : "barato"}">${d > 0 ? "▲" : "▼"} ${Grilla.formato(Math.abs(d), 1)} % ${d > 0 ? "más caro" : "más barato"}</span>`;
+      } else vs.innerHTML = "";
+      const cambio = !igual(venta, tr.dataset.venta) || !igual(mercado, tr.dataset.mercado);
+      tr.classList.toggle("cambiada", cambio);
+      if (cambio) cambiadas += 1;
+    }
+    botonGuardar.disabled = cambiadas === 0;
+    botonDescartar.hidden = cambiadas === 0;
+    estado.textContent = cambiadas ? `${cambiadas} producto(s) con cambios sin guardar` : "";
+  }
+
+  tabla.addEventListener("input", (e) => { e.target.classList.remove("error-servidor"); recalcular(); });
+  Grilla.teclado(tabla, () => {});
+  botonDescartar.addEventListener("click", () => {
+    for (const tr of filas) {
+      tr.querySelector(".c-venta").value = tr.dataset.venta ? Grilla.formato(Number(tr.dataset.venta)) : "";
+      tr.querySelector(".c-mercado").value = tr.dataset.mercado ? Grilla.formato(Number(tr.dataset.mercado)) : "";
+    }
+    recalcular();
+  });
+  botonGuardar.addEventListener("click", async () => {
+    const items = filas.filter((tr) => tr.classList.contains("cambiada")).map((tr) => ({
+      id: Number(tr.dataset.id), precio_venta: tr.querySelector(".c-venta").value,
+      precio_mercado: tr.querySelector(".c-mercado").value }));
+    botonGuardar.disabled = true;
+    estado.textContent = "Guardando…";
+    const r = await Grilla.guardar("{{ url_for('productos_precios') }}", { items }, csrf);
+    if (r.ok) { filas.forEach((tr) => tr.classList.remove("cambiada")); location.reload(); return; }
+    botonGuardar.disabled = false;
+    (r.errores || []).forEach((err) => {
+      const tr = filas.find((f) => Number(f.dataset.id) === err.id);
+      const campo = tr && tr.querySelector(err.campo === "precio_mercado" ? ".c-mercado" : ".c-venta");
+      if (campo) { campo.classList.add("invalido", "error-servidor"); campo.title = err.mensaje; }
+    });
+    estado.textContent = "No se guardó nada: " + (r.errores || []).map((e) => e.mensaje).join(" · ");
+  });
+  Grilla.avisoSinGuardar(() => filas.some((tr) => tr.classList.contains("cambiada")));
+  recalcular();
+})();
+</script>
 {% endif %}
 
 {% if subrecetas %}

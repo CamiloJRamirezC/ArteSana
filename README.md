@@ -20,6 +20,20 @@ Se puede usar de dos formas:
 
 Los números se escriben al estilo paraguayo: `1.500` es mil quinientos y `2,5` es dos y medio.
 
+## Precio de venta, margen y precio de mercado
+
+En **Productos**, la tabla *Para vender* se edita directo:
+
+- **Precio de venta ✎**: el que cobrás. Si lo dejás vacío, se usa el **sugerido** (costo × multiplicador, en gris).
+- **Ganancia** y **Margen** se recalculan mientras escribís. Margen = (precio de venta − costo) ÷ precio de venta.
+  Es un margen **bruto**: descuenta ingredientes y empaque, no gas ni mano de obra.
+  En rojo, los que quedan por debajo del **margen mínimo** (60 % por defecto; se cambia en Configuración).
+- **Precio de mercado ✎**: lo que cobran otros por algo parecido. Debajo ves si estás **más caro o más barato** y cuánto.
+  La referencia (ej. «Confitería X») se carga en *Editar datos* del producto.
+
+Tocás **Guardar precios** y se guardan todos los cambios juntos. En la ficha de cada producto también ves el margen
+y la comparación con el mercado. El Excel de *Productos* incluye *Precio de venta*, *Precio de mercado* y su referencia.
+
 ## Cargar rápido: grillas y Excel
 
 **Ingredientes de una receta (grilla).** En cada receta, los ingredientes se cargan como en una planilla:

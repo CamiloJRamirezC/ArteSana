@@ -42,12 +42,21 @@
         <label>Multiplicador
           <input name="multiplicador" inputmode="decimal" value="{{ f.get('multiplicador', 3)|cant if f.get('multiplicador', 3) is number else f.get('multiplicador') }}">
         </label>
-        <label>Precio de venta real (opcional)
+        <label>Precio de venta (opcional)
           <input name="precio_venta_real" inputmode="decimal" value="{{ (f.get('precio_venta_real')|gs) if f.get('precio_venta_real') is number else (f.get('precio_venta_real') or '') }}" placeholder="Gs">
         </label>
       </div>
       <p class="ayuda">Precio sugerido = costo por unidad × multiplicador. ×3 significa que los ingredientes son un tercio del precio.
-        Si ya tenés un precio decidido, cargalo en «precio real» y vas a ver cuánto ganás.</p>
+        Si ya decidiste tu precio, cargalo en «Precio de venta»: la ganancia y el margen se calculan con ese.</p>
+      <div class="fila">
+        <label>Precio de mercado (opcional)
+          <input name="precio_mercado" inputmode="decimal" value="{{ (f.get('precio_mercado')|gs) if f.get('precio_mercado') is number else (f.get('precio_mercado') or '') }}" placeholder="Gs">
+        </label>
+        <label>Referencia (opcional)
+          <input name="mercado_ref" value="{{ f.get('mercado_ref') or '' }}" placeholder="ej. Confitería X, alfajor de 50 g">
+        </label>
+      </div>
+      <p class="ayuda">Lo que cobran otros por algo parecido. Se usa para mostrarte si estás más caro o más barato.</p>
     </div>
 
     <label>Notas (opcional)

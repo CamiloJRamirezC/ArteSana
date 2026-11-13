@@ -57,7 +57,7 @@ def test_precio_real_y_alertas():
     rec[2]["precio_venta_real"] = 1000
     r = costeo.calcular(ing, rec, items)["recetas"][2]
     assert r["precio_venta"] == 1000
-    assert "El precio de venta real es menor que el costo" in r["alertas"]
+    assert "El precio de venta es menor que el costo" in r["alertas"]
 
 
 def test_redondeo_sin_escalon_de_mas():
@@ -204,7 +204,7 @@ def test_flujo_completo(cliente):
     # precio real
     html = post(cliente, "/recetas/2/editar", nombre="Alfajores de maicena", tipo="venta", rinde="30",
                 unidad_rinde="u", multiplicador="3", precio_venta_real="6.000", notas="").get_data(as_text=True)
-    assert "6.000" in html and "Precio real cargado" in html
+    assert "6.000" in html and "Cargado por vos" in html
 
     # duplicar y borrar
     html = post(cliente, "/recetas/2/duplicar").get_data(as_text=True)
@@ -374,3 +374,61 @@ def test_archivo_que_no_es_excel(cliente):
     html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(b"a;b"), "x.csv")},
                         content_type="multipart/form-data", follow_redirects=True).get_data(as_text=True)
     assert "tiene que ser de Excel" in html
+
+
+# ------------------------------------------------------------ precio de venta, margen y mercado
+
+def test_margen_y_precio_de_mercado(cliente):
+    entrar(cliente)
+    post(cliente, "/ejemplo")
+    html = cliente.get("/").get_data(as_text=True)
+    assert 'data-costo="1693.53' in html and 'placeholder="5.100"' in html     # sugerido en gris
+
+    def guardar(items):
+        return cliente.post("/productos/precios", json={"items": items}, headers={"X-CSRF-Token": "tok"})
+
+    # costo 1.693,53; venta 5.500 -> ganancia 3.806,47; margen 69,2 %; mercado 6.000 -> 8,3 % más barato
+    r = guardar([{"id": 2, "precio_venta": "5.500", "precio_mercado": "6.000"}])
+    assert r.get_json() == {"ok": True, "guardados": 1}
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert "5.500 Gs" in det and "3.806 Gs" in det and "69,2 %" in det and "margen-ok" in det
+    assert "6.000 Gs" in det and "8,3 % más barato" in det
+
+    # margen bajo el mínimo -> rojo
+    guardar([{"id": 2, "precio_venta": "3.000", "precio_mercado": "6.000"}])
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert "43,5 %" in det and "alerta-margen" in det
+    post(cliente, "/configuracion", redondeo="100", margen_minimo="40")
+    assert "alerta-margen" not in cliente.get("/recetas/2").get_data(as_text=True)
+
+    # vacío = vuelve al sugerido; errores no guardan nada
+    guardar([{"id": 2, "precio_venta": "", "precio_mercado": ""}])
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert "5.100 Gs" in det and "(sobre el sugerido)" in det and "Cargalo" in det
+    r = guardar([{"id": 2, "precio_venta": "abc", "precio_mercado": "1"}, {"id": 999, "precio_venta": "1"}])
+    assert r.status_code == 400 and len(r.get_json()["errores"]) == 2
+
+    # desde el formulario, con referencia
+    post(cliente, "/recetas/2/editar", nombre="Alfajores de maicena", tipo="venta", rinde="30", unidad_rinde="u",
+         multiplicador="3", precio_venta_real="", precio_mercado="7.000", mercado_ref="Confitería X", notas="")
+    det = cliente.get("/recetas/2").get_data(as_text=True)
+    assert "7.000 Gs" in det and "Confitería X" in det and "27,1 % más barato" in det
+
+    # Excel: exporta e importa las columnas nuevas
+    import io
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(cliente.get("/exportar.xlsx").data))
+    ws = wb["Productos"]
+    encabezados = [c.value for c in ws[1]]
+    assert "Precio de venta" in encabezados and "Precio de mercado" in encabezados
+    fila = [c.value for c in ws[3]] if ws["A3"].value == "Alfajores de maicena" else [c.value for c in ws[2]]
+    assert 7000 in fila and "Confitería X" in fila
+    ws.cell(row=[c.value for c in ws["A"]].index("Alfajores de maicena") + 1,
+            column=encabezados.index("Precio de mercado") + 1, value=6500)
+    buf = io.BytesIO()
+    wb.save(buf)
+    html = cliente.post("/importar", data={"csrf": "tok", "archivo": (io.BytesIO(buf.getvalue()), "p.xlsx")},
+                        content_type="multipart/form-data").get_data(as_text=True)
+    token = re.search(r'name="token" value="([0-9a-f]+)"', html).group(1)
+    post(cliente, "/importar/aplicar", token=token)
+    assert "6.500 Gs" in cliente.get("/recetas/2").get_data(as_text=True)

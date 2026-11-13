@@ -8,7 +8,7 @@ Reglas:
 - Costo por unidad = costo de la tanda / rinde (lo que se cuenta o pesa al terminar).
 - Una subreceta (relleno, base) rinde en g, ml o u y se usa como ingrediente en otras.
 - Recetas de venta: precio sugerido = costo por unidad x multiplicador, redondeado hacia
-  arriba. Si se carga un precio de venta real, se usa ese para la ganancia.
+  arriba. Si se carga un precio de venta (manual), se usa ese para la ganancia y el margen.
 """
 import math
 from collections import defaultdict
@@ -140,6 +140,10 @@ def calcular(ingredientes, recetas, items, redondeo=100):
             "ganancia": None,
             "porcentaje_ingredientes": None,
             "multiplicador_efectivo": None,
+            "margen": None,          # (precio de venta - costo) / precio de venta
+            "usa_sugerido": False,   # no hay precio de venta manual: se usa el sugerido
+            "precio_mercado": None,
+            "vs_mercado": None,      # precio de venta / precio de mercado - 1 (negativo = más barato)
         }
         if r.get("tipo") == "venta":
             mult = r.get("multiplicador") or 0
@@ -156,9 +160,15 @@ def calcular(ingredientes, recetas, items, redondeo=100):
                 "ganancia": precio - costo_unitario,
                 "porcentaje_ingredientes": (costo_unitario / precio) if precio else None,
                 "multiplicador_efectivo": (precio / costo_unitario) if costo_unitario else None,
+                "margen": ((precio - costo_unitario) / precio) if precio else None,
+                "usa_sugerido": not (real and real > 0),
             })
+            mercado = r.get("precio_mercado")
+            if mercado and mercado > 0:
+                res["precio_mercado"] = mercado
+                res["vs_mercado"] = (precio / mercado - 1) if precio else None
             if real and real > 0 and real < costo_unitario:
-                alertas.append("El precio de venta real es menor que el costo")
+                alertas.append("El precio de venta es menor que el costo")
 
         visitando.discard(rid)
         resultados[rid] = res
